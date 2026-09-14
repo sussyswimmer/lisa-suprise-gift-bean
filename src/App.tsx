@@ -149,6 +149,7 @@ export default function App() {
         // Claude Code hooks are optional; Claude Desktop Accessibility can still connect.
       }
       await invoke("request_accessibility_permission");
+      await invoke("start_observer", {});
       dispatch({ type: "setWelcomeShown" });
     } catch (error) {
       setConnectionError(error instanceof Error ? error.message : String(error));

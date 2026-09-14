@@ -30,7 +30,7 @@ The test builds are unsigned. On first launch, macOS may require Control-clickin
 
 ## Claude monitoring
 
-Bean reads only local macOS Accessibility labels exposed by Claude Desktop to determine app state. It does not collect chat text, credentials, session tokens, or send Claude data anywhere.
+Bean finds the current Claude Desktop host (`com.anthropic.claudefordesktop`) and reads its local macOS Accessibility labels to determine app state. Chat, Cowork, and Code run inside that host and are distinguished from the labels Claude exposes. Bean does not collect credentials or session tokens, and it sends no Claude data anywhere.
 
 Claude Code uses its official local Hooks system. Bean installs five status-only hooks after the user selects **Connect Bean to Claude**: sent, complete, failed, stopped, and attention needed. The hooks write only status words to Bean’s local application-support folder; they never read the prompt or response. Claude Desktop Chat and Cowork remain an Accessibility-based integration and depend on the labels those apps expose on the destination Mac.
 

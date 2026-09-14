@@ -16,6 +16,10 @@ struct SessionTracker {
 }
 
 let supportedApps = [
+  // Current Claude Desktop bundle identifier. Chat, Cowork, and Code all live
+  // inside this host application and are distinguished from Accessibility labels.
+  "com.anthropic.claudefordesktop",
+  // Keep the older identifiers for users who have not updated Claude yet.
   "com.anthropic.claude",
   "com.anthropic.claude-cowork",
 ]
