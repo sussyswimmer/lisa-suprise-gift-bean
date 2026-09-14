@@ -4,6 +4,17 @@ Bean is a floating macOS companion for Claude Chat and Claude Cowork.
 
 It is packaged with Tauri, React, and TypeScript. Bean does not use Claude API keys and does not store chat data.
 
+## Download Bean
+
+**[Open the Bean Releases page](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases)** for every downloadable build.
+
+| Release | Apple Silicon (M1–M4) | Intel Mac |
+| --- | --- | --- |
+| [v0.1.0-test.2 — animated companion](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/tag/v0.1.0-test.2) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.2/Bean_0.1.0_aarch64.dmg) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.2/Bean_0.1.0_x64.dmg) |
+| [v0.1.0-test.1](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/tag/v0.1.0-test.1) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.1/Bean_0.1.0_aarch64.dmg) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.1/Bean_0.1.0_x64.dmg) |
+
+The test builds are unsigned. On first launch, macOS may require Control-clicking Bean and choosing **Open**.
+
 ## What it does
 
 - stays as a tiny always-on-top desktop companion
