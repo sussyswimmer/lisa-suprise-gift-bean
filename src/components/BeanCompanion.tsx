@@ -1,7 +1,7 @@
-import { BeanAssetState } from "../types";
+import { BeanAssetState, BeanState } from "../types";
 
 interface BeanCompanionProps {
-  state: string;
+  state: BeanState;
   assets: BeanAssetState;
   statusText: string;
   source: string;
@@ -25,6 +25,16 @@ export default function BeanCompanion({
     return "idle";
   })();
 
+  const animationLabel: Record<BeanState, string> = {
+    idle: "gentle idle breathing and tail wag",
+    thinking: "typing on a tiny computer",
+    happy: "jump celebration",
+    noticed: "attention alert",
+    message: "concerned check-in",
+    sleepy: "sleeping breathing",
+    soundOff: "quiet idle",
+  };
+
   return (
     <button
       type="button"
@@ -35,13 +45,19 @@ export default function BeanCompanion({
           onDragStart();
         }
       }}
-      aria-label="Move Bean"
+      aria-label={`Move Bean — ${animationLabel[state]}`}
     >
       <div className="status-bubble" aria-live="polite">
         <span className="status-tag">{source}</span>
         <span className="status-text">{statusText}</span>
       </div>
-      <img className="bean-image" src={assets[assetKey as keyof BeanAssetState]} alt="Bean companion" draggable={false} />
+      <div className="bean-stage" aria-hidden="true">
+        <img className="bean-image" src={assets[assetKey as keyof BeanAssetState]} alt="" draggable={false} />
+        {state === "thinking" && <span className="typing-pixels"><i /><i /><i /></span>}
+        {state === "happy" && <span className="celebration-pixels"><i /><i /><i /><i /></span>}
+        {state === "noticed" && <span className="attention-mark">!</span>}
+        {state === "sleepy" && <span className="sleep-pixels">z z</span>}
+      </div>
     </button>
   );
 }
