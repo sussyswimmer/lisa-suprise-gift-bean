@@ -8,6 +8,7 @@ Bean is a draggable macOS companion for Claude Desktop. It uses your existing Cl
 
 | Release | Apple Silicon (M1–M4) | Intel Mac |
 | --- | --- | --- |
+| [v0.1.0-test.6 — Claude snippets](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/tag/v0.1.0-test.6) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.6/Bean_0.1.0_aarch64.dmg) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.6/Bean_0.1.0_x64.dmg) |
 | [v0.1.0-test.5 — draggable Claude Code companion](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/tag/v0.1.0-test.5) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.5/Bean_0.1.0_aarch64.dmg) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.5/Bean_0.1.0_x64.dmg) |
 | [v0.1.0-test.4 — corrected companion](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/tag/v0.1.0-test.4) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.4/Bean_0.1.0_aarch64.dmg) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.4/Bean_0.1.0_x64.dmg) |
 | [v0.1.0-test.3 — character-only companion](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/tag/v0.1.0-test.3) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.3/Bean_0.1.0_aarch64.dmg) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.3/Bean_0.1.0_x64.dmg) |
@@ -45,4 +46,5 @@ npx tauri build
 ```
 
 The GitHub workflow creates unsigned Apple Silicon and Intel DMGs with SHA-256 checksums. A normal signed/notarized gift release still needs Apple Developer credentials.
+
 
