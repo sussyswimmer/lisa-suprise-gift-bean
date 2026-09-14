@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "Bean",
-        "width": 180,
-        "height": 246,
+        "width": 140,
+        "height": 140,
         "resizable": false,
         "fullscreen": false,
         "decorations": false,

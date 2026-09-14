@@ -4,7 +4,6 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
 import BeanCompanion from "./components/BeanCompanion";
-import ControlPanel from "./components/ControlPanel";
 import { BeanManifest, BeanAssetState, ClaudeEvent } from "./types";
 import { initialState, nextStateFromEvent, reducer } from "./state";
 import { DEFAULT_ASSET_PACK, loadManifest, normalizeStatusForAsset } from "./beanAssets";
@@ -39,11 +38,8 @@ export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
   const [manifest, setManifest] = useState<BeanManifest>(DEFAULT_ASSET_PACK);
-  const [permissionKnown, setPermissionKnown] = useState(false);
   const unlistenRef = useRef<(() => void) | null>(null);
   const lastCompletedTs = useRef<string>("");
-  const [panelNote, setPanelNote] = useState(state.preferences.currentNote);
-  const [panelManualNote, setPanelManualNote] = useState(state.preferences.manualMessage);
   const [assetPackPath, setAssetPackPath] = useState("");
 
   useEffect(() => {
@@ -167,11 +163,6 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    setPanelNote(state.preferences.currentNote);
-    setPanelManualNote(state.preferences.manualMessage);
-  }, [state.preferences.currentNote, state.preferences.manualMessage]);
-
   const mappedAsset = useMemo(() => {
     const key = normalizeStatusForAsset(state.beanState);
     const source = { ...manifest.states } as BeanAssetState;
@@ -195,76 +186,9 @@ export default function App() {
     };
   }, [manifest, assetPackPath]);
 
-  const handlePause = async () => {
-    const next = !state.paused;
-    dispatch({ type: "setPaused", paused: next });
-    if (next) {
-      await invoke("stop_observer", {});
-    } else {
-      await invoke("start_observer", {});
-    }
-  };
-
-  const handleSound = () => {
-    dispatch({
-      type: "setSound",
-      soundEnabled: !state.preferences.soundEnabled,
-    });
-  };
-
-  const handleQuit = async () => {
-    await invoke("quit_app", {});
-  };
-
-  const handleHide = async () => {
-    if (isTauriEnv()) {
-      await appWindow.hide();
-    }
-  };
-
-  const handleGrant = async () => {
-    await invoke("request_accessibility_permission", {});
-    dispatch({ type: "setUnavailable", unavailable: false });
-    setPermissionKnown(true);
-  };
-
   const handleDrag = async () => {
     if (!isTauriEnv()) return;
     await appWindow.startDragging();
-  };
-
-  const handleManualMessage = (value: string) => {
-    setPanelManualNote(value);
-    dispatch({ type: "setManualMessage", value });
-  };
-
-  const handleNoteSave = (value: string) => {
-    setPanelNote(value);
-    dispatch({ type: "setCurrentNote", value });
-  };
-
-  const handleNoteReset = () => {
-    handleNoteSave(DEFAULT_MANUAL_NOTE);
-  };
-
-  const handlePhotoMode = () => {
-    dispatch({
-      type: "setPhotoMode",
-      photoMode: !state.preferences.photoMode,
-    });
-  };
-
-  const updateAssetPack = async (path: string) => {
-    const trimmed = path.trim();
-    if (!trimmed) return;
-    try {
-      const result = await invoke<{ manifestPath?: string }>("set_asset_pack_path", { path: trimmed });
-      if (result?.manifestPath) {
-        setAssetPackPath(trimmed);
-      }
-    } catch {
-      dispatch({ type: "setBean", state: "noticed", statusText: "Asset pack path is invalid" });
-    }
   };
 
   return (
@@ -277,29 +201,6 @@ export default function App() {
           assets={mappedAsset}
           onDragStart={handleDrag}
         />
-        <div className="message-strip" aria-live="polite">
-          <p>{state.unavailable ? "Unavailable until permission is restored." : state.preferences.currentNote}</p>
-          <p>{state.lastStatusTs ? `Updated ${new Date(state.lastStatusTs).toLocaleTimeString()}` : "Waiting for activity"}</p>
-        </div>
-        <ControlPanel
-          isPaused={state.paused}
-          isSoundEnabled={state.preferences.soundEnabled}
-          isPhotoMode={state.preferences.photoMode}
-          manualMessage={panelManualNote}
-          note={panelNote}
-          hasPermission={permissionKnown}
-          onPauseToggle={handlePause}
-          onSoundToggle={handleSound}
-          onRequestGrant={handleGrant}
-          onQuit={handleQuit}
-          onHide={handleHide}
-          onPhotoMode={handlePhotoMode}
-          onManualMessage={handleManualMessage}
-          onNoteSave={handleNoteSave}
-          onNoteReset={handleNoteReset}
-          onAssetPackPath={updateAssetPack}
-        />
-        <p className="caption">Bean status monitor for Claude Chat and Cowork</p>
       </main>
     </div>
   );

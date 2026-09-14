@@ -39,7 +39,11 @@ export default function BeanCompanion({
     <button
       type="button"
       className={`bean-shell bean-${state}`}
-      onMouseDown={onDragStart}
+      onPointerDown={(event) => {
+        if (event.button === 0) {
+          void onDragStart();
+        }
+      }}
       onKeyDown={(evt) => {
         if (evt.key === "Enter" || evt.key === " ") {
           onDragStart();
@@ -47,10 +51,7 @@ export default function BeanCompanion({
       }}
       aria-label={`Move Bean — ${animationLabel[state]}`}
     >
-      <div className="status-bubble" aria-live="polite">
-        <span className="status-tag">{source}</span>
-        <span className="status-text">{statusText}</span>
-      </div>
+      <span className="visually-hidden" aria-live="polite">{source}: {statusText}</span>
       <div className="bean-stage" aria-hidden="true">
         <img className="bean-image" src={assets[assetKey as keyof BeanAssetState]} alt="" draggable={false} />
         {state === "thinking" && <span className="typing-pixels"><i /><i /><i /></span>}

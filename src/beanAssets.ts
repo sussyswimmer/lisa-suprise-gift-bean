@@ -3,13 +3,13 @@ import { BeanAssetState, BeanManifest } from "./types";
 export const DEFAULT_ASSET_PACK = {
   version: "1.0",
   states: {
-    idle: "/bean/placeholder/idle.svg",
-    noticed: "/bean/placeholder/noticed.svg",
-    thinking: "/bean/placeholder/thinking.svg",
-    message: "/bean/placeholder/message.svg",
-    happy: "/bean/placeholder/happy.svg",
-    sleepy: "/bean/placeholder/sleepy.svg",
-    soundOff: "/bean/placeholder/sound-off.svg",
+    idle: "/bean/generated/idle.png",
+    noticed: "/bean/generated/idle.png",
+    thinking: "/bean/generated/working.png",
+    message: "/bean/generated/idle.png",
+    happy: "/bean/generated/idle.png",
+    sleepy: "/bean/generated/idle.png",
+    soundOff: "/bean/generated/idle.png",
   },
 };
 
