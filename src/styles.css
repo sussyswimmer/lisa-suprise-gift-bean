@@ -95,10 +95,13 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 .bean-sleepy { animation: sleepy-breathe 3.2s var(--ease) infinite; }
 
 .app-welcome { display: grid; place-items: center; padding: 14px; background: #fff8ed; }
-.welcome-dialog { width: 100%; color: #26334b; text-align: center; }
+.welcome-dialog { width: 100%; max-width: 332px; color: #26334b; text-align: center; }
 .welcome-pixel { display: block; font-size: 23px; line-height: 24px; image-rendering: pixelated; }
 .welcome-dialog h1 { margin: 5px 0 7px; font-family: "Courier New", monospace; font-size: 17px; line-height: 20px; }
 .welcome-dialog p { margin: 6px 2px; font-size: 12px; line-height: 15px; }
+.content-opt-in { display: flex; gap: 8px; align-items: flex-start; margin: 9px 4px 4px; padding: 9px; border: 1px solid #bdc9dc; border-radius: 8px; background: #ffffff; text-align: left; font-size: 12px; line-height: 15px; cursor: pointer; }
+.content-opt-in input { margin: 1px 0 0; accent-color: #4d71b2; }
+.welcome-detail { color: #617084; font-size: 10px !important; line-height: 12px !important; }
 .welcome-dialog button { margin: 7px 0 5px; padding: 9px 12px; border: 2px solid #243b68; border-radius: 8px; background: #4d71b2; color: white; box-shadow: 0 3px 0 #233a62; font: 700 11px "Courier New", monospace; cursor: pointer; }
 .welcome-dialog button:active { box-shadow: none; transform: translateY(3px); }
 .welcome-dialog small { display: block; color: #617084; font-size: 9px; line-height: 11px; }

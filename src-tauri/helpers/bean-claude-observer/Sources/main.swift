@@ -7,6 +7,7 @@ struct ClaudeEvent: Codable {
   let session: String?
   let status: String
   let timestamp: String
+  let preview: String?
 }
 
 struct SessionTracker {
@@ -27,8 +28,8 @@ func now() -> String {
   ISO8601DateFormatter().string(from: Date())
 }
 
-func emit(_ source: String, _ session: String?, _ status: String) {
-  let event = ClaudeEvent(source: source, session: session, status: status, timestamp: now())
+func emit(_ source: String, _ session: String?, _ status: String, _ preview: String? = nil) {
+  let event = ClaudeEvent(source: source, session: session, status: status, timestamp: now(), preview: preview)
   guard let data = try? JSONEncoder().encode(event), let line = String(data: data, encoding: .utf8) else {
     return
   }
@@ -195,10 +196,16 @@ func pollClaudeCodeHooks() -> Bool {
   claudeCodeEventOffset = size
 
   guard let raw = String(data: data, encoding: .utf8) else { return true }
-  for status in raw.split(whereSeparator: { $0.isNewline }).map(String.init) {
-    guard ["working", "completed", "failed", "attention_needed", "stopped"].contains(status) else { continue }
-    emit("claude_code", nil, status)
+  for line in raw.split(whereSeparator: { $0.isNewline }).map(String.init) {
+    if let eventData = line.data(using: .utf8), let event = try? JSONDecoder().decode(ClaudeEvent.self, from: eventData) {
+      emit(event.source, event.session, event.status, event.preview)
+    } else if ["working", "completed", "reply", "failed", "attention_needed", "stopped"].contains(line) {
+      emit("claude_code", nil, line)
+    }
   }
+  // Prompt and reply text only needs a short-lived local handoff between the hook and Bean.
+  try? Data().write(to: eventsURL, options: .atomic)
+  claudeCodeEventOffset = 0
   return true
 }
 func pollAccessibility(for bundleID: String) -> Bool {
@@ -226,7 +233,36 @@ func pollAccessibility(for bundleID: String) -> Bool {
   return true
 }
 
+func hookPreview(from input: Data, includeContent: Bool) -> (String?, String?) {
+  guard includeContent,
+        let object = try? JSONSerialization.jsonObject(with: input) as? [String: Any] else { return (nil, nil) }
+  let session = object["session_id"] as? String
+  for key in ["prompt", "message", "text", "content"] {
+    if let value = object[key] as? String, !value.isEmpty { return (session, value) }
+  }
+  return (session, nil)
+}
+
+func appendClaudeCodeHook(status: String, includeContent: Bool) {
+  let input = FileHandle.standardInput.readDataToEndOfFile()
+  let (session, preview) = hookPreview(from: input, includeContent: includeContent)
+  let event = ClaudeEvent(source: "claude_code", session: session, status: status, timestamp: now(), preview: preview)
+  guard let encoded = try? JSONEncoder().encode(event) else { return }
+  let eventsURL = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent("Library/Application Support/Bean/claude-code-events")
+  try? FileManager.default.createDirectory(at: eventsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+  if !FileManager.default.fileExists(atPath: eventsURL.path) { FileManager.default.createFile(atPath: eventsURL.path, contents: nil) }
+  if let handle = try? FileHandle(forWritingTo: eventsURL) {
+    defer { try? handle.close() }
+    try? handle.seekToEnd()
+    try? handle.write(encoded + Data("\n".utf8))
+  }
+}
 let args = CommandLine.arguments
+if let hookIndex = args.firstIndex(of: "--claude-code-hook"), args.indices.contains(hookIndex + 1) {
+  appendClaudeCodeHook(status: args[hookIndex + 1], includeContent: args.contains("content"))
+  exit(0)
+}
 if args.contains("--request-permission") {
   emit("system", nil, requestAccessibilityPermission() ? "idle" : "unavailable")
   exit(0)

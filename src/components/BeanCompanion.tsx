@@ -7,24 +7,26 @@ interface BeanCompanionProps {
   statusText: string;
   source: string;
   session: string | null;
+  preview: string | null;
   onDragStart: () => void;
 }
 
-function bubbleFor(state: BeanState, source: string, statusText: string, session: string | null) {
-  if (state === "thinking") return { title: `${source === "claude_code" ? "Claude Code" : source === "cowork" ? "Cowork" : "Claude"} is working`, detail: "Bean is typing along…" };
-  if (state === "happy") return { title: "Reply is ready!", detail: "Bean did a little jump." };
+function bubbleFor(state: BeanState, source: string, statusText: string, session: string | null, preview: string | null) {
+  const snippet = preview?.replace(/\s+/g, " ").trim().slice(0, 96);
+  if (state === "thinking") return { title: snippet ? "You asked Claude Code" : `${source === "claude_code" ? "Claude Code" : source === "cowork" ? "Cowork" : "Claude"} is working`, detail: snippet ?? "Bean is typing along…" };
+  if (state === "happy") return { title: "Reply is ready!", detail: snippet ?? "Bean did a little jump." };
   if (state === "noticed") return { title: "Claude needs you", detail: "There is an action waiting." };
   if (state === "message") return { title: "Claude paused", detail: statusText };
   if (state === "sleepy") return { title: "Bean is waiting", detail: "Open Claude Desktop to begin." };
   return { title: session ? "Claude is ready" : "Bean is here", detail: statusText };
 }
 
-export default function BeanCompanion({ state, asset, statusText, source, session, onDragStart }: BeanCompanionProps) {
+export default function BeanCompanion({ state, asset, statusText, source, session, preview, onDragStart }: BeanCompanionProps) {
   const animationLabel: Record<BeanState, string> = {
     idle: "gentle idle breathing and tail wag", thinking: "typing on a tiny computer", happy: "jump celebration",
     noticed: "attention alert", message: "concerned check-in", sleepy: "sleeping breathing", soundOff: "quiet idle",
   };
-  const bubble = bubbleFor(state, source, statusText, session);
+  const bubble = bubbleFor(state, source, statusText, session, preview);
 
   const startNativeDrag = (event: MouseEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;

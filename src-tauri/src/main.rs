@@ -92,18 +92,16 @@ async fn request_accessibility_permission(app: AppHandle) -> Result<bool, String
 }
 
 #[tauri::command]
-fn install_claude_code_hooks() -> Result<String, String> {
+fn install_claude_code_hooks(app: AppHandle, include_content: bool) -> Result<String, String> {
+    let sidecar = resolve_sidecar_path(&app)?;
+    let quoted_sidecar = format!("'{}'", sidecar.to_string_lossy().replace("'", "'\\''"));
     let home = std::env::var_os("HOME").ok_or("home directory is unavailable")?;
     let claude_dir = PathBuf::from(home).join(".claude");
     fs::create_dir_all(&claude_dir).map_err(|e| format!("could not create Claude Code settings directory: {e}"))?;
 
     let hook_path = claude_dir.join("bean-claude-code-hook.sh");
-    fs::write(&hook_path, r#"#!/bin/sh
-set -eu
-state_dir="$HOME/Library/Application Support/Bean"
-mkdir -p "$state_dir"
-printf '%s\n' "$1" >> "$state_dir/claude-code-events"
-"#).map_err(|e| format!("could not write Bean's local Claude Code hook: {e}"))?;
+    let hook_script = format!("#!/bin/sh\nset -eu\nexec {quoted_sidecar} --claude-code-hook \"$1\" {}\n", if include_content { "content" } else { "status" });
+    fs::write(&hook_path, hook_script).map_err(|e| format!("could not write Bean's local Claude Code hook: {e}"))?;
 
     #[cfg(unix)]
     {
@@ -128,6 +126,7 @@ printf '%s\n' "$1" >> "$state_dir/claude-code-events"
     for (event, status) in [
         ("UserPromptSubmit", "working"),
         ("Stop", "completed"),
+        ("MessageDisplay", "reply"),
         ("StopFailure", "failed"),
         ("Notification", "attention_needed"),
         ("SessionEnd", "stopped"),

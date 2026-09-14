@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -37,6 +38,7 @@ export default function App() {
   const unlistenRef = useRef<(() => void) | null>(null);
   const lastCompletedTs = useRef<string>("");
   const [assetPackPath, setAssetPackPath] = useState("");
+  const [showContent, setShowContent] = useState(true);
 
   useEffect(() => { stateRef.current = state; }, [state]);
 
@@ -62,6 +64,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!isTauriEnv()) return;
+    const size = state.preferences.welcomeShown ? new LogicalSize(252, 216) : new LogicalSize(360, 370);
+    void appWindow.setSize(size);
+  }, [state.preferences.welcomeShown]);
+  useEffect(() => {
     localStorage.setItem(PREFS_KEY, JSON.stringify({
       version: 1,
       preferences: state.preferences,
@@ -85,6 +92,7 @@ export default function App() {
         state: next.beanState,
         statusText: next.statusText,
         session: payload.session,
+        preview: payload.preview,
         source: payload.source as "chat" | "cowork" | "claude_code" | "system",
       });
 
@@ -137,7 +145,7 @@ export default function App() {
 
   const connectClaude = async () => {
     if (isTauriEnv()) {
-      try { await invoke("install_claude_code_hooks"); } catch { /* settings are left unchanged if they cannot be safely updated */ }
+      try { await invoke("install_claude_code_hooks", { includeContent: showContent }); } catch { /* settings are left unchanged if they cannot be safely updated */ }
       try { await invoke("request_accessibility_permission"); } catch { /* observer will surface unavailable state */ }
     }
     dispatch({ type: "setWelcomeShown" });
@@ -154,12 +162,13 @@ export default function App() {
             statusText={state.statusText}
             source={state.source}
             session={state.session}
+            preview={state.preview}
             asset={currentAsset}
             onDragStart={handleDrag}
           />
         </main>
       ) : (
-        <WelcomeDialog onConnect={() => void connectClaude()} />
+        <WelcomeDialog showContent={showContent} onShowContentChange={setShowContent} onConnect={() => void connectClaude()} />
       )}
     </div>
   );

@@ -4,6 +4,7 @@ export type ClaudeStatus =
   | "idle"
   | "working"
   | "thinking"
+  | "reply"
   | "message"
   | "attention_needed"
   | "completed"
@@ -18,6 +19,7 @@ export interface ClaudeEvent {
   session: string | null;
   status: ClaudeStatus;
   timestamp: string;
+  preview?: string | null;
 }
 
 export interface BeanAssetState {

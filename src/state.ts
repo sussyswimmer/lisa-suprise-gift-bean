@@ -21,6 +21,7 @@ export interface CompanionState {
   unavailable: boolean;
   preferences: BeanPrefs;
   lastStatusTs: string | null;
+  preview: string | null;
 }
 
 const defaultPrefs: BeanPrefs = {
@@ -44,6 +45,7 @@ export const initialState: CompanionState = {
   unavailable: false,
   preferences: defaultPrefs,
   lastStatusTs: null,
+  preview: null,
 };
 
 type Action =
@@ -53,6 +55,7 @@ type Action =
       statusText: string;
       source?: "chat" | "cowork" | "claude_code" | "system";
       session?: string | null;
+      preview?: string | null;
     }
   | { type: "setPaused"; paused: boolean }
   | { type: "setMuted"; muted: boolean }
@@ -76,6 +79,7 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
         session: action.session ?? state.session,
         lastStatusTs: new Date().toISOString(),
         unavailable: false,
+        preview: action.preview ?? state.preview,
       };
     case "setPaused":
       return {
@@ -163,6 +167,9 @@ export function nextStateFromEvent(event: ClaudeEvent, now: CompanionState): Com
     };
   }
 
+  if (status === "reply") {
+    return { ...now, unavailable: false, source: event.source, session: event.session, beanState: "idle", statusText: "Claude replied", lastStatusTs: event.timestamp, preview: event.preview ?? null };
+  }
   if (status === "completed") {
     const eventKey = buildDedupKey(event);
     const alreadySeen = now.preferences.lastEventKey === eventKey;
