@@ -8,7 +8,7 @@ Bean is a draggable macOS companion for Claude Desktop. It uses your existing Cl
 
 | Release | Apple Silicon (M1–M4) | Intel Mac |
 | --- | --- | --- |
-| v0.1.0-test.5 — interaction and observer fix | pending build | pending build |
+| v0.1.0-test.5 — interaction, Claude Code hooks, and observer fix | pending build | pending build |
 | [v0.1.0-test.4 — corrected companion](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/tag/v0.1.0-test.4) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.4/Bean_0.1.0_aarch64.dmg) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.4/Bean_0.1.0_x64.dmg) |
 | [v0.1.0-test.3 — character-only companion](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/tag/v0.1.0-test.3) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.3/Bean_0.1.0_aarch64.dmg) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.3/Bean_0.1.0_x64.dmg) |
 | [v0.1.0-test.2 — animated companion](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/tag/v0.1.0-test.2) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.2/Bean_0.1.0_aarch64.dmg) | [DMG](https://github.com/sussyswimmer/lisa-suprise-gift-bean/releases/download/v0.1.0-test.2/Bean_0.1.0_x64.dmg) |
@@ -22,6 +22,7 @@ The test builds are unsigned. On first launch, macOS may require Control-clickin
 - requests macOS Accessibility permission only after that explanation
 - keeps Bean draggable from the sprite itself, with no opaque app panel around her
 - shows a compact local status bubble above Bean: working, ready, attention needed, or waiting
+- uses official local Claude Code hooks for sent, complete, failed, stopped, and attention-needed states
 - runs the bundled macOS Accessibility helper from the installed app bundle
 - gives a pixel animation for idle, working, attention, stopped, and completion states
 - stores preferences locally only; personal reference photos are outside git
@@ -30,7 +31,7 @@ The test builds are unsigned. On first launch, macOS may require Control-clickin
 
 Bean reads only local macOS Accessibility labels exposed by Claude Desktop to determine app state. It does not collect chat text, credentials, session tokens, or send Claude data anywhere.
 
-The live detector is designed for Claude Desktop Chat and Cowork. Claude Code running inside a terminal has no equivalent reliable, transcript-free completion signal available through macOS Accessibility, so this build does not claim terminal/CLI completion notifications.
+Claude Code uses its official local Hooks system. Bean installs five status-only hooks after the user selects **Connect Bean to Claude**: sent, complete, failed, stopped, and attention needed. The hooks write only status words to Bean’s local application-support folder; they never read the prompt or response. Claude Desktop Chat and Cowork remain an Accessibility-based integration and depend on the labels those apps expose on the destination Mac.
 
 ## Build
 

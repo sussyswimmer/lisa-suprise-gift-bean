@@ -14,7 +14,7 @@ export interface BeanPrefs {
 export interface CompanionState {
   beanState: BeanState;
   statusText: string;
-  source: "chat" | "cowork" | "system";
+  source: "chat" | "cowork" | "claude_code" | "system";
   session: string | null;
   muted: boolean;
   paused: boolean;
@@ -51,7 +51,7 @@ type Action =
       type: "setBean";
       state: BeanState;
       statusText: string;
-      source?: "chat" | "cowork" | "system";
+      source?: "chat" | "cowork" | "claude_code" | "system";
       session?: string | null;
     }
   | { type: "setPaused"; paused: boolean }
@@ -158,7 +158,7 @@ export function nextStateFromEvent(event: ClaudeEvent, now: CompanionState): Com
       source: event.source,
       session: event.session,
       beanState: "thinking",
-      statusText: `${event.source === "chat" ? "Chat" : "Cowork"} is running`,
+      statusText: `${event.source === "claude_code" ? "Claude Code" : event.source === "chat" ? "Chat" : "Cowork"} is running`,
       lastStatusTs: event.timestamp,
     };
   }

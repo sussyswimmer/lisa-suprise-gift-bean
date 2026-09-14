@@ -85,7 +85,7 @@ export default function App() {
         state: next.beanState,
         statusText: next.statusText,
         session: payload.session,
-        source: payload.source as "chat" | "cowork" | "system",
+        source: payload.source as "chat" | "cowork" | "claude_code" | "system",
       });
 
       if (next.beanState === "happy" && payload.timestamp !== lastCompletedTs.current && next.preferences.lastCompletedAt !== payload.timestamp) {
@@ -137,6 +137,7 @@ export default function App() {
 
   const connectClaude = async () => {
     if (isTauriEnv()) {
+      try { await invoke("install_claude_code_hooks"); } catch { /* settings are left unchanged if they cannot be safely updated */ }
       try { await invoke("request_accessibility_permission"); } catch { /* observer will surface unavailable state */ }
     }
     dispatch({ type: "setWelcomeShown" });

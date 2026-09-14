@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -5,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -90,6 +92,60 @@ async fn request_accessibility_permission(app: AppHandle) -> Result<bool, String
 }
 
 #[tauri::command]
+fn install_claude_code_hooks() -> Result<String, String> {
+    let home = std::env::var_os("HOME").ok_or("home directory is unavailable")?;
+    let claude_dir = PathBuf::from(home).join(".claude");
+    fs::create_dir_all(&claude_dir).map_err(|e| format!("could not create Claude Code settings directory: {e}"))?;
+
+    let hook_path = claude_dir.join("bean-claude-code-hook.sh");
+    fs::write(&hook_path, r#"#!/bin/sh
+set -eu
+state_dir="$HOME/Library/Application Support/Bean"
+mkdir -p "$state_dir"
+printf '%s\n' "$1" >> "$state_dir/claude-code-events"
+"#).map_err(|e| format!("could not write Bean's local Claude Code hook: {e}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("could not make Bean's Claude Code hook executable: {e}"))?;
+    }
+
+    let settings_path = claude_dir.join("settings.json");
+    let mut settings = if settings_path.exists() {
+        let raw = fs::read_to_string(&settings_path).map_err(|e| format!("could not read Claude Code settings: {e}"))?;
+        serde_json::from_str::<Value>(&raw).map_err(|e| format!("Claude Code settings are not valid JSON; Bean left them unchanged: {e}"))?
+    } else {
+        json!({})
+    };
+
+    let root = settings.as_object_mut().ok_or("Claude Code settings must be a JSON object")?;
+    let hooks = root.entry("hooks").or_insert_with(|| json!({}));
+    let hooks = hooks.as_object_mut().ok_or("Claude Code hooks must be a JSON object")?;
+    let hook_command = |status: &str| format!("\"$HOME/.claude/bean-claude-code-hook.sh\" {status}");
+
+    for (event, status) in [
+        ("UserPromptSubmit", "working"),
+        ("Stop", "completed"),
+        ("StopFailure", "failed"),
+        ("Notification", "attention_needed"),
+        ("SessionEnd", "stopped"),
+    ] {
+        let groups = hooks.entry(event.to_string()).or_insert_with(|| json!([]));
+        let groups = groups.as_array_mut().ok_or_else(|| format!("Claude Code hook '{event}' must be an array"))?;
+        groups.retain(|group| !group.to_string().contains("bean-claude-code-hook.sh"));
+        groups.push(json!({
+            "matcher": "",
+            "hooks": [{ "type": "command", "command": hook_command(status) }]
+        }));
+    }
+
+    let pretty = serde_json::to_string_pretty(&settings).map_err(|e| format!("could not serialize Claude Code settings: {e}"))?;
+    fs::write(&settings_path, format!("{pretty}\n")).map_err(|e| format!("could not save Claude Code settings: {e}"))?;
+    Ok("Claude Code hooks installed".into())
+}
+#[tauri::command]
 fn get_asset_pack_path(state: State<'_, BeanState>) -> Option<String> {
     state.asset_pack_path.lock().ok().and_then(|s| s.clone())
 }
@@ -124,6 +180,7 @@ fn main() {
             set_asset_pack_path,
             get_asset_pack_path,
             request_accessibility_permission,
+            install_claude_code_hooks,
             quit_app
         ])
         .setup(|app| {

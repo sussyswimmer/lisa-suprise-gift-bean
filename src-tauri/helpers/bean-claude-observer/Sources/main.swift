@@ -20,6 +20,8 @@ let supportedApps = [
 ]
 var trackers = [String: SessionTracker]()
 var didRequestAccessibilityPermission = false
+var claudeCodeEventOffset: UInt64?
+var claudeCodeHooksAvailable = false
 
 func now() -> String {
   ISO8601DateFormatter().string(from: Date())
@@ -166,6 +168,39 @@ func resetTracker(_ key: String) {
   trackers[key] = SessionTracker()
 }
 
+func pollClaudeCodeHooks() -> Bool {
+  let eventsURL = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent("Library/Application Support/Bean/claude-code-events")
+  guard let attributes = try? FileManager.default.attributesOfItem(atPath: eventsURL.path),
+        let fileSize = attributes[.size] as? NSNumber else {
+    return false
+  }
+
+  claudeCodeHooksAvailable = true
+  let size = fileSize.uint64Value
+  guard let previousOffset = claudeCodeEventOffset else {
+    // Ignore events from a previous Bean run: only animate live Claude Code activity.
+    claudeCodeEventOffset = size
+    return true
+  }
+
+  let offset = size < previousOffset ? 0 : previousOffset
+  guard size > offset, let handle = try? FileHandle(forReadingFrom: eventsURL) else {
+    claudeCodeEventOffset = offset
+    return true
+  }
+  defer { try? handle.close() }
+  try? handle.seek(toOffset: offset)
+  let data = (try? handle.readToEnd()) ?? Data()
+  claudeCodeEventOffset = size
+
+  guard let raw = String(data: data, encoding: .utf8) else { return true }
+  for status in raw.split(whereSeparator: { $0.isNewline }).map(String.init) {
+    guard ["working", "completed", "failed", "attention_needed", "stopped"].contains(status) else { continue }
+    emit("claude_code", nil, status)
+  }
+  return true
+}
 func pollAccessibility(for bundleID: String) -> Bool {
   let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleID }
   guard let app = apps.first else {
@@ -207,13 +242,16 @@ if args.contains("--simulate") {
 }
 
 while true {
+  let hasClaudeCodeHooks = pollClaudeCodeHooks() || claudeCodeHooksAvailable
   guard isAccessibilityTrusted() else {
     if !didRequestAccessibilityPermission {
       _ = requestAccessibilityPermission()
       didRequestAccessibilityPermission = true
     }
-    emit("system", nil, "unavailable")
-    Thread.sleep(forTimeInterval: 2)
+    if !hasClaudeCodeHooks {
+      emit("system", nil, "unavailable")
+    }
+    Thread.sleep(forTimeInterval: 1.2)
     continue
   }
 
@@ -221,7 +259,7 @@ while true {
   for bundleID in supportedApps {
     observedApp = pollAccessibility(for: bundleID) || observedApp
   }
-  if !observedApp {
+  if !observedApp && !hasClaudeCodeHooks {
     emit("system", nil, "unavailable")
   }
   Thread.sleep(forTimeInterval: 1.2)

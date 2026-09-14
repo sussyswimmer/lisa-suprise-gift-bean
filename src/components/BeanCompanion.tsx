@@ -11,7 +11,7 @@ interface BeanCompanionProps {
 }
 
 function bubbleFor(state: BeanState, source: string, statusText: string, session: string | null) {
-  if (state === "thinking") return { title: `${source === "cowork" ? "Cowork" : "Claude"} is working`, detail: "Bean is typing along…" };
+  if (state === "thinking") return { title: `${source === "claude_code" ? "Claude Code" : source === "cowork" ? "Cowork" : "Claude"} is working`, detail: "Bean is typing along…" };
   if (state === "happy") return { title: "Reply is ready!", detail: "Bean did a little jump." };
   if (state === "noticed") return { title: "Claude needs you", detail: "There is an action waiting." };
   if (state === "message") return { title: "Claude paused", detail: statusText };

@@ -1,4 +1,4 @@
-export type ClaudeSource = "chat" | "cowork";
+export type ClaudeSource = "chat" | "cowork" | "claude_code" | "system";
 
 export type ClaudeStatus =
   | "idle"
