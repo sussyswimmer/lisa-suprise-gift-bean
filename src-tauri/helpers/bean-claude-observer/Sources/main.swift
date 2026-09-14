@@ -53,8 +53,8 @@ func stringValue(_ element: AXUIElement, _ attribute: CFString) -> String? {
 func primaryWindow(_ appElement: AXUIElement) -> AXUIElement? {
   var focusedWindow: CFTypeRef?
   if AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success,
-     let window = focusedWindow as? AXUIElement {
-    return window
+     let focusedWindow {
+    return focusedWindow as! AXUIElement
   }
 
   var windowsValue: CFTypeRef?
