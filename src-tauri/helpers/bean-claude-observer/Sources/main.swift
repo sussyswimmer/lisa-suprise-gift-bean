@@ -44,9 +44,11 @@ func fetchSessionTitle(_ appElement: AXUIElement) -> String? {
     return nil
   }
 
+  let window = focusedWindow as! AXUIElement
+
   var titleValue: CFTypeRef?
-  let e = AXUIElementCopyAttributeValue(focusedWindow!, kAXTitleAttribute as CFString, &titleValue)
-  if e != .success || titleValue == nil {
+  let e = AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleValue)
+  if e != AXError.success || titleValue == nil {
     return nil
   }
 
