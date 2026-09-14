@@ -31,6 +31,7 @@ export default function ControlPanel({
   onRequestGrant,
   onQuit,
   onHide,
+  onPhotoMode,
   onManualMessage,
   onNoteSave,
   onNoteReset,

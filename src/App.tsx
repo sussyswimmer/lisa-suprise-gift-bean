@@ -120,7 +120,7 @@ export default function App() {
 
         if (next.beanState === "happy") {
           if (payload.timestamp !== lastCompletedTs.current && next.preferences.lastCompletedAt !== payload.timestamp) {
-            if (next.preferences.soundEnabled && !next.preferences.muted) {
+            if (next.preferences.soundEnabled && !next.muted) {
               playTone();
             }
             if (next.preferences.soundEnabled && "Notification" in window) {
