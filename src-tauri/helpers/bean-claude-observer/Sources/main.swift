@@ -19,6 +19,7 @@ let supportedApps = [
   "com.anthropic.claude-cowork",
 ]
 var trackers = [String: SessionTracker]()
+var didRequestAccessibilityPermission = false
 
 func now() -> String {
   ISO8601DateFormatter().string(from: Date())
@@ -207,6 +208,10 @@ if args.contains("--simulate") {
 
 while true {
   guard isAccessibilityTrusted() else {
+    if !didRequestAccessibilityPermission {
+      _ = requestAccessibilityPermission()
+      didRequestAccessibilityPermission = true
+    }
     emit("system", nil, "unavailable")
     Thread.sleep(forTimeInterval: 2)
     continue
