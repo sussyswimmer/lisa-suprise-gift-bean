@@ -24,11 +24,26 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
       - name: Install dependencies
-        run: npm install
+        run: npm ci
       - name: Build frontend bundle
         run: npm run build
+      - name: Build Accessibility helper
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) swift_target="arm64-apple-macosx14.0" ;;
+            x86_64-apple-darwin) swift_target="x86_64-apple-macosx14.0" ;;
+          esac
+          swiftc -O \
+            -target "$swift_target" \
+            -framework ApplicationServices \
+            -framework Foundation \
+            -framework AppKit \
+            src-tauri/helpers/bean-claude-observer/Sources/main.swift \
+            -o "src-tauri/helpers/bean-claude-observer-${{ matrix.target }}"
+          chmod +x "src-tauri/helpers/bean-claude-observer-${{ matrix.target }}"
       - name: Build signed-disabled DMG
         uses: tauri-apps/tauri-action@v0
         with:

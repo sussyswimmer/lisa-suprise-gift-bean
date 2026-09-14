@@ -27,9 +27,8 @@
     ],
     "security": {
       "assetProtocol": {
-        "scope": {
-          "allow": [{ "url": "http://localhost/**" }, { "url": "asset://**" }]
-        }
+        "enable": true,
+        "scope": ["$HOME/**"]
       }
     },
     "macOSPrivateApi": true
@@ -37,7 +36,6 @@
   "bundle": {
     "active": true,
     "targets": ["dmg"],
-    "identifier": "com.yourname.bean",
     "icon": [],
     "externalBin": ["helpers/bean-claude-observer"]
   }

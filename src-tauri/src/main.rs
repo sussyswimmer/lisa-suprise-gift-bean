@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Serialize, Deserialize, Clone)]
 struct ClaudeEvent {
@@ -15,6 +15,7 @@ struct ClaudeEvent {
     timestamp: String,
 }
 
+#[derive(Default)]
 struct ObserverState {
     child: Mutex<Option<Child>>,
 }
