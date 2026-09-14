@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { appWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
@@ -11,6 +11,7 @@ import { DEFAULT_ASSET_PACK, loadManifest, normalizeStatusForAsset } from "./bea
 
 const PREFS_KEY = "bean.preferences.v1";
 const DEFAULT_MANUAL_NOTE = "Official Bean report: you are very loved.";
+const appWindow = getCurrentWindow();
 
 function playTone() {
   if (typeof AudioContext === "undefined") {
