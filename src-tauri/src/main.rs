@@ -100,7 +100,7 @@ fn install_claude_code_hooks(app: AppHandle, include_content: bool) -> Result<St
     fs::create_dir_all(&claude_dir).map_err(|e| format!("could not create Claude Code settings directory: {e}"))?;
 
     let hook_path = claude_dir.join("bean-claude-code-hook.sh");
-    let hook_script = format!("#!/bin/sh\nset -eu\nexec {quoted_sidecar} --claude-code-hook \"$1\" {}\n", if include_content { "content" } else { "status" });
+    let hook_script = format!("#!/bin/sh\nset -eu\npgrep -x Bean >/dev/null 2>&1 || exit 0\nexec {quoted_sidecar} --claude-code-hook \"$1\" {}\n", if include_content { "content" } else { "status" });
     fs::write(&hook_path, hook_script).map_err(|e| format!("could not write Bean's local Claude Code hook: {e}"))?;
 
     #[cfg(unix)]
