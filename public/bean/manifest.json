@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "states": {
+    "idle": "/bean/placeholder/idle.svg",
+    "noticed": "/bean/placeholder/noticed.svg",
+    "thinking": "/bean/placeholder/thinking.svg",
+    "message": "/bean/placeholder/message.svg",
+    "happy": "/bean/placeholder/happy.svg",
+    "sleepy": "/bean/placeholder/sleepy.svg",
+    "soundOff": "/bean/placeholder/sound-off.svg"
+  }
+}

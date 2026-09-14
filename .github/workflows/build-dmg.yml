@@ -1,0 +1,48 @@
+name: Build Bean DMG (test)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Build frontend bundle
+        run: npm run build
+      - name: Build signed-disabled DMG
+        uses: tauri-apps/tauri-action@v0
+        with:
+          tauriScript: npx tauri
+          projectPath: ./src-tauri
+          args: --target ${{ matrix.target }}
+      - name: Emit checksums
+        run: |
+          shasum -a 256 src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg > \
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/sha256-${{ matrix.target }}.txt
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bean-${{ matrix.target }}-dmg
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/sha256-${{ matrix.target }}.txt

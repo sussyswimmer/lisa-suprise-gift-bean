@@ -1,0 +1,264 @@
+:root {
+  --warm: #f5efe8;
+  --cool: #0a1118;
+  --soft-shadow: rgba(0, 0, 0, 0.25);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  font-family: "Atkinson Hyperlegible", "Avenir Next", "Inter", sans-serif;
+  background: transparent;
+  color: #1b2530;
+  overflow: hidden;
+}
+
+#root {
+  width: min(430px, 100%);
+}
+
+.app-shell {
+  position: fixed;
+  inset: auto;
+  width: 180px;
+  min-width: 180px;
+  height: 246px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(244, 238, 238, 0.35));
+  box-shadow: 0 14px 24px var(--soft-shadow);
+  padding: 8px;
+  pointer-events: auto;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  user-select: none;
+}
+
+.shell-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bean-shell {
+  all: unset;
+  width: 100%;
+  min-height: 120px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  position: relative;
+  background: rgba(255, 255, 255, 0.35);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08) inset;
+}
+
+.bean-shell:focus-visible {
+  outline: 2px solid #365a74;
+}
+
+.bean-image {
+  width: 90px;
+  height: 90px;
+  object-fit: contain;
+}
+
+.status-bubble {
+  position: absolute;
+  top: -6px;
+  left: 8px;
+  background: #fff;
+  border-radius: 999px;
+  border: 1px solid #dde3ea;
+  min-width: 150px;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.3;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
+}
+
+.status-tag {
+  font-weight: 600;
+  color: #2a3f55;
+  margin-right: 4px;
+}
+
+.status-text {
+  color: #33475d;
+}
+
+.bean-idle {
+  transform: translateY(0);
+  transition: transform 320ms var(--ease-in-out), opacity 280ms var(--ease-in-out);
+}
+
+.bean-thinking {
+  animation: thinking 2.1s var(--ease-in-out) infinite;
+}
+
+.bean-message {
+  animation: message 1.3s var(--ease-out) 1;
+}
+
+.bean-happy {
+  animation: happy 0.95s var(--ease-out) both;
+}
+
+.bean-noticed {
+  animation: noticed 0.5s var(--ease-out) 2;
+}
+
+.bean-soundOff {
+  filter: grayscale(0.6);
+}
+
+.bean-sleepy {
+  opacity: 0.65;
+}
+
+@keyframes thinking {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-1px) rotate(-1deg);
+  }
+  50% {
+    transform: translateY(1px) rotate(1deg);
+  }
+}
+
+@keyframes message {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.03);
+  }
+}
+
+@keyframes happy {
+  from {
+    transform: rotate(-4deg) scale(1.02);
+  }
+  to {
+    transform: rotate(4deg) scale(1.08);
+  }
+}
+
+@keyframes noticed {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-2px);
+  }
+}
+
+.message-strip {
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid #dce5ef;
+  border-radius: 10px;
+  padding: 4px 8px;
+  min-height: 50px;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.message-strip p {
+  margin: 2px 0;
+  color: #3a4655;
+}
+
+.control-panel {
+  border: 1px solid #dce5ef;
+  border-radius: 12px;
+  padding: 4px;
+  background: rgba(255, 255, 255, 0.58);
+  display: grid;
+  gap: 6px;
+}
+
+.controls-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.control-button {
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid #c4d1db;
+  border-radius: 10px;
+  background: #fff;
+  font-size: 12px;
+  color: #32485e;
+  cursor: pointer;
+}
+
+.control-button.danger {
+  background: #ffeff0;
+}
+
+.field {
+  display: grid;
+  gap: 3px;
+  font-size: 11px;
+}
+
+.field span {
+  color: #314759;
+  font-weight: 600;
+}
+
+.field textarea,
+.field input {
+  border: 1px solid #bfd0de;
+  border-radius: 8px;
+  padding: 6px 8px;
+  min-height: 44px;
+  font-size: 12px;
+}
+
+.caption {
+  margin: 0;
+  text-align: center;
+  font-size: 10px;
+  color: #33475d;
+}
+
+@media (max-width: 768px), (max-width: 430px) {
+  .app-shell {
+    width: 96vw;
+    max-width: 300px;
+    height: auto;
+    min-height: 246px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bean-thinking,
+  .bean-message,
+  .bean-happy,
+  .bean-noticed {
+    animation: none !important;
+  }
+
+  .bean-shell {
+    transition: none !important;
+  }
+}

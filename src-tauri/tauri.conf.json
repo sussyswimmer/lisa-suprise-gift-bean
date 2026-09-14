@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Bean",
+  "version": "0.1.0",
+  "identifier": "com.yourname.bean",
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Bean",
+        "width": 180,
+        "height": 246,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": true,
+        "focus": false
+      }
+    ],
+    "security": {
+      "assetProtocol": {
+        "scope": {
+          "allow": [{ "url": "http://localhost/**" }, { "url": "asset://**" }]
+        }
+      }
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg"],
+    "identifier": "com.yourname.bean",
+    "icon": [],
+    "externalBin": ["helpers/bean-claude-observer"]
+  }
+}
