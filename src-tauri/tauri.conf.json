@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "Bean",
-        "width": 140,
-        "height": 140,
+        "width": 252,
+        "height": 216,
         "resizable": false,
         "fullscreen": false,
         "decorations": false,
@@ -28,15 +28,21 @@
     "security": {
       "assetProtocol": {
         "enable": true,
-        "scope": ["$HOME/**"]
+        "scope": [
+          "$HOME/**"
+        ]
       }
     },
     "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg"],
+    "targets": [
+      "dmg"
+    ],
     "icon": [],
-    "externalBin": ["helpers/bean-claude-observer"]
+    "externalBin": [
+      "helpers/bean-claude-observer"
+    ]
   }
 }

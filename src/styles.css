@@ -1,298 +1,119 @@
 :root {
-  --warm: #f5efe8;
-  --cool: #0a1118;
-  --soft-shadow: rgba(0, 0, 0, 0.25);
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --warm: #fff8ed;
+  --ink: #283039;
+  --blue: #375a95;
+  --shadow: rgba(29, 42, 60, 0.2);
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
-* {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperlegible", "Avenir Next", sans-serif; }
 
-html,
-body,
-#root {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-}
-
-body {
-  font-family: "Atkinson Hyperlegible", "Avenir Next", "Inter", sans-serif;
-  background: transparent;
-  color: #1b2530;
-  overflow: hidden;
-}
-
-#root {
-  width: 140px;
-  height: 140px;
-}
-
-.app-shell {
-  position: fixed;
-  inset: auto;
-  width: 140px;
-  height: 140px;
-  padding: 0;
-  background: transparent;
-  box-shadow: none;
-  pointer-events: none;
-  user-select: none;
-}
-
-.shell-content {
-  width: 100%;
-  height: 100%;
-}
+.app-shell { width: 100%; height: 100%; background: transparent; user-select: none; }
+.shell-content { width: 100%; height: 100%; pointer-events: none; }
+.companion-area { position: relative; width: 100%; height: 100%; }
 
 .bean-shell {
   all: unset;
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  bottom: 1px;
+  left: 50%;
+  width: 140px;
+  height: 140px;
   display: grid;
   place-items: center;
-  position: relative;
+  transform: translateX(-50%);
   cursor: grab;
   pointer-events: auto;
   touch-action: none;
+  opacity: 1;
+  filter: none;
 }
-
 .bean-shell:active { cursor: grabbing; }
+.bean-shell:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
-.bean-shell:focus-visible {
-  outline: 2px solid #365a74;
-}
+.bean-stage { width: 132px; height: 132px; position: relative; display: grid; place-items: center; }
+.bean-image { width: 128px; height: 128px; object-fit: contain; image-rendering: pixelated; -webkit-user-drag: none; }
 
-.bean-image {
-  width: 128px;
-  height: 128px;
-  object-fit: contain;
-  image-rendering: pixelated;
-}
-
-.bean-stage {
-  width: 132px;
-  height: 132px;
-  position: relative;
-  display: grid;
-  place-items: center;
-}
-
-.typing-pixels,
-.celebration-pixels,
-.sleep-pixels,
-.attention-mark {
+.activity-bubble {
   position: absolute;
-  pointer-events: none;
-  font-family: "Courier New", monospace;
-  font-weight: 900;
-  image-rendering: pixelated;
-}
-
-.typing-pixels {
-  right: 2px;
-  bottom: 8px;
-  display: flex;
-  gap: 3px;
-}
-
-.typing-pixels i {
-  width: 4px;
-  height: 4px;
-  background: #5f87be;
-  box-shadow: 0 0 0 1px #152d53;
-  animation: typing-pixel 0.8s steps(2, end) infinite;
-}
-
-.typing-pixels i:nth-child(2) {
-  animation-delay: 0.16s;
-}
-
-.typing-pixels i:nth-child(3) {
-  animation-delay: 0.32s;
-}
-
-.celebration-pixels {
-  inset: 8px;
-}
-
-.celebration-pixels i {
-  position: absolute;
-  width: 5px;
-  height: 5px;
-  background: #f3b745;
-  box-shadow: 0 0 0 1px #9e5d24;
-  animation: confetti 0.9s steps(4, end) both;
-}
-
-.celebration-pixels i:nth-child(1) { left: 8px; top: 14px; background: #f6d7eb; }
-.celebration-pixels i:nth-child(2) { right: 7px; top: 8px; background: #75a9d6; animation-delay: 0.07s; }
-.celebration-pixels i:nth-child(3) { left: 19px; bottom: 9px; animation-delay: 0.12s; }
-.celebration-pixels i:nth-child(4) { right: 20px; bottom: 13px; background: #e58e6f; animation-delay: 0.04s; }
-
-.attention-mark {
-  top: 5px;
-  right: 12px;
-  color: #b94e49;
-  font-size: 22px;
-  line-height: 1;
-  text-shadow: 2px 2px 0 #fff;
-  animation: attention-mark 0.5s steps(2, end) 2;
-}
-
-.sleep-pixels {
+  z-index: 2;
   top: 8px;
-  right: 4px;
-  color: #6a78a0;
-  font-size: 12px;
-  letter-spacing: 1px;
-  animation: sleep-pixels 2.4s steps(4, end) infinite;
+  left: 50%;
+  width: 236px;
+  min-height: 52px;
+  padding: 9px 14px 10px;
+  transform: translateX(-50%);
+  border: 2px solid #233a62;
+  border-radius: 13px;
+  background: rgba(255, 252, 246, 0.98);
+  box-shadow: 0 4px 0 rgba(35, 58, 98, 0.2), 0 9px 18px var(--shadow);
+  color: #202c3b;
+  font-family: "Courier New", monospace;
+  pointer-events: none;
 }
-
-.visually-hidden {
+.activity-bubble::after {
+  content: "";
   position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+  left: 50%;
+  bottom: -9px;
+  width: 14px;
+  height: 14px;
+  background: #fffaf2;
+  border-right: 2px solid #233a62;
+  border-bottom: 2px solid #233a62;
+  transform: translateX(-50%) rotate(45deg);
 }
+.activity-bubble strong, .activity-bubble span { position: relative; z-index: 1; display: block; }
+.activity-bubble strong { font-size: 12px; line-height: 15px; letter-spacing: -0.25px; }
+.activity-bubble span { margin-top: 2px; color: #697789; font-size: 10px; line-height: 13px; }
+.activity-thinking { border-color: #486eae; }
+.activity-happy { border-color: #b87831; }
+.activity-noticed { border-color: #af514d; }
 
-.bean-idle {
-  animation: idle-breathe 2.8s var(--ease-in-out) infinite;
-}
+.typing-pixels, .celebration-pixels, .sleep-pixels, .attention-mark { position: absolute; pointer-events: none; font-family: "Courier New", monospace; font-weight: 900; image-rendering: pixelated; }
+.typing-pixels { right: 2px; bottom: 8px; display: flex; gap: 3px; }
+.typing-pixels i { width: 4px; height: 4px; background: #5f87be; box-shadow: 0 0 0 1px #152d53; animation: typing-pixel .8s steps(2, end) infinite; }
+.typing-pixels i:nth-child(2) { animation-delay: .16s; }
+.typing-pixels i:nth-child(3) { animation-delay: .32s; }
+.celebration-pixels { inset: 8px; }
+.celebration-pixels i { position: absolute; width: 5px; height: 5px; background: #f3b745; box-shadow: 0 0 0 1px #9e5d24; animation: confetti .9s steps(4, end) both; }
+.celebration-pixels i:nth-child(1) { left: 8px; top: 14px; background: #f6d7eb; }
+.celebration-pixels i:nth-child(2) { right: 7px; top: 8px; background: #75a9d6; animation-delay: .07s; }
+.celebration-pixels i:nth-child(3) { left: 19px; bottom: 9px; animation-delay: .12s; }
+.celebration-pixels i:nth-child(4) { right: 20px; bottom: 13px; background: #e58e6f; animation-delay: .04s; }
+.attention-mark { top: 5px; right: 12px; color: #b94e49; font-size: 22px; text-shadow: 2px 2px 0 #fff; animation: attention-mark .5s steps(2, end) 2; }
+.sleep-pixels { top: 8px; right: 4px; color: #6a78a0; font-size: 12px; letter-spacing: 1px; animation: sleep-pixels 2.4s steps(4, end) infinite; }
 
-.bean-thinking {
-  animation: typing 0.9s steps(2, end) infinite;
-}
+.bean-idle { animation: idle-breathe 2.8s var(--ease) infinite; }
+.bean-thinking { animation: typing .9s steps(2, end) infinite; }
+.bean-message { animation: message 1.3s var(--ease) 1; }
+.bean-happy { animation: happy-jump 1.15s var(--ease) both; }
+.bean-noticed { animation: noticed .5s steps(3, end) 2; }
+.bean-soundOff { filter: grayscale(.6); }
+.bean-sleepy { animation: sleepy-breathe 3.2s var(--ease) infinite; }
 
-.bean-message {
-  animation: message 1.3s var(--ease-out) 1;
-}
+.app-welcome { display: grid; place-items: center; padding: 14px; background: #fff8ed; }
+.welcome-dialog { width: 100%; color: #26334b; text-align: center; }
+.welcome-pixel { display: block; font-size: 23px; line-height: 24px; image-rendering: pixelated; }
+.welcome-dialog h1 { margin: 5px 0 7px; font-family: "Courier New", monospace; font-size: 17px; line-height: 20px; }
+.welcome-dialog p { margin: 6px 2px; font-size: 12px; line-height: 15px; }
+.welcome-dialog button { margin: 7px 0 5px; padding: 9px 12px; border: 2px solid #243b68; border-radius: 8px; background: #4d71b2; color: white; box-shadow: 0 3px 0 #233a62; font: 700 11px "Courier New", monospace; cursor: pointer; }
+.welcome-dialog button:active { box-shadow: none; transform: translateY(3px); }
+.welcome-dialog small { display: block; color: #617084; font-size: 9px; line-height: 11px; }
 
-.bean-happy {
-  animation: happy-jump 1.15s var(--ease-out) both;
-}
-
-.bean-noticed {
-  animation: noticed 0.5s steps(3, end) 2;
-}
-
-.bean-soundOff {
-  filter: grayscale(0.6);
-}
-
-.bean-sleepy {
-  opacity: 0.72;
-  animation: sleepy-breathe 3.2s var(--ease-in-out) infinite;
-}
-
-@keyframes idle-breathe {
-  0%,
-  100% {
-    transform: translateY(0) scale(1);
-  }
-  50% {
-    transform: translateY(-1px) scale(1.018, 0.985);
-  }
-}
-
-@keyframes typing {
-  0%, 100% {
-    transform: translateY(0) rotate(0deg);
-  }
-  25% {
-    transform: translate(-1px, 1px) rotate(-1deg);
-  }
-  50% {
-    transform: translate(1px, 0) rotate(1deg);
-  }
-  75% {
-    transform: translate(0, 1px) rotate(0deg);
-  }
-}
-
-@keyframes message {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  40% {
-    transform: scale(1.03);
-  }
-}
-
-@keyframes happy-jump {
-  0% {
-    transform: translateY(0) scale(1.05, 0.95);
-  }
-  38% {
-    transform: translateY(-18px) scale(0.92, 1.1) rotate(-3deg);
-  }
-  70% {
-    transform: translateY(0) scale(1.12, 0.88) rotate(2deg);
-  }
-  100% {
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes noticed {
-  0%, 100% {
-    transform: translateX(0) rotate(0deg);
-  }
-  50% {
-    transform: translateX(-3px) rotate(-2deg);
-  }
-}
-
-@keyframes typing-pixel {
-  0%, 100% { transform: translateY(0); opacity: 0.35; }
-  50% { transform: translateY(-5px); opacity: 1; }
-}
-
-@keyframes confetti {
-  from { transform: translateY(-7px) rotate(0deg); opacity: 0; }
-  30% { opacity: 1; }
-  to { transform: translateY(13px) rotate(180deg); opacity: 0; }
-}
-
-@keyframes attention-mark {
-  0%, 100% { transform: translateY(0) scale(1); }
-  50% { transform: translateY(-5px) scale(1.15); }
-}
-
-@keyframes sleepy-breathe {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(0.975, 1.02); }
-}
-
-@keyframes sleep-pixels {
-  0%, 100% { transform: translate(0, 2px); opacity: 0.45; }
-  50% { transform: translate(5px, -5px); opacity: 1; }
-}
+@keyframes idle-breathe { 0%, 100% { transform: translateX(-50%) translateY(0) scale(1); } 50% { transform: translateX(-50%) translateY(-1px) scale(1.018, .985); } }
+@keyframes typing { 0%, 100% { transform: translateX(-50%) translateY(0) rotate(0); } 25% { transform: translateX(calc(-50% - 1px)) translateY(1px) rotate(-1deg); } 50% { transform: translateX(calc(-50% + 1px)) translateY(0) rotate(1deg); } 75% { transform: translateX(-50%) translateY(1px); } }
+@keyframes message { 0%, 100% { transform: translateX(-50%) scale(1); } 40% { transform: translateX(-50%) scale(1.03); } }
+@keyframes happy-jump { 0% { transform: translateX(-50%) translateY(0) scale(1.05, .95); } 38% { transform: translateX(-50%) translateY(-18px) scale(.92, 1.1) rotate(-3deg); } 70% { transform: translateX(-50%) translateY(0) scale(1.12, .88) rotate(2deg); } 100% { transform: translateX(-50%) translateY(0) scale(1); } }
+@keyframes noticed { 0%, 100% { transform: translateX(-50%) rotate(0); } 50% { transform: translateX(calc(-50% - 3px)) rotate(-2deg); } }
+@keyframes sleepy-breathe { 0%,100% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(.975, 1.02); } }
+@keyframes typing-pixel { 0%,100% { transform: translateY(0); opacity: .35; } 50% { transform: translateY(-5px); opacity: 1; } }
+@keyframes confetti { from { transform: translateY(-7px) rotate(0); opacity: 0; } 30% { opacity: 1; } to { transform: translateY(13px) rotate(180deg); opacity: 0; } }
+@keyframes attention-mark { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-5px) scale(1.15); } }
+@keyframes sleep-pixels { 0%,100% { transform: translate(0, 2px); opacity: .45; } 50% { transform: translate(5px, -5px); opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .bean-thinking,
-  .bean-message,
-  .bean-happy,
-  .bean-noticed,
-  .bean-idle,
-  .bean-sleepy,
-  .typing-pixels i,
-  .celebration-pixels i,
-  .attention-mark,
-  .sleep-pixels {
-    animation: none !important;
-  }
-
-  .bean-shell {
-    transition: none !important;
-  }
+  .bean-shell, .typing-pixels i, .celebration-pixels i, .attention-mark, .sleep-pixels { animation: none !important; }
 }

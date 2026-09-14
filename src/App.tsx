@@ -4,6 +4,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
 import BeanCompanion from "./components/BeanCompanion";
+import WelcomeDialog from "./components/WelcomeDialog";
 import { BeanManifest, BeanAssetState, ClaudeEvent } from "./types";
 import { initialState, nextStateFromEvent, reducer } from "./state";
 import { DEFAULT_ASSET_PACK, loadManifest, normalizeStatusForAsset } from "./beanAssets";
@@ -13,9 +14,7 @@ const DEFAULT_MANUAL_NOTE = "Official Bean report: you are very loved.";
 const appWindow = getCurrentWindow();
 
 function playTone() {
-  if (typeof AudioContext === "undefined") {
-    return;
-  }
+  if (typeof AudioContext === "undefined") return;
   const context = new AudioContext();
   const osc = context.createOscillator();
   const gain = context.createGain();
@@ -28,10 +27,7 @@ function playTone() {
 }
 
 function isTauriEnv() {
-  return (
-    typeof window !== "undefined" &&
-    typeof (window as Window & { __TAURI__?: unknown }).__TAURI__ !== "undefined"
-  );
+  return typeof window !== "undefined" && typeof (window as Window & { __TAURI__?: unknown }).__TAURI__ !== "undefined";
 }
 
 export default function App() {
@@ -42,18 +38,12 @@ export default function App() {
   const lastCompletedTs = useRef<string>("");
   const [assetPackPath, setAssetPackPath] = useState("");
 
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
+  useEffect(() => { stateRef.current = state; }, [state]);
 
   useEffect(() => {
-    void loadManifest().then((nextManifest) => {
-      setManifest(nextManifest ?? DEFAULT_ASSET_PACK);
-    });
+    void loadManifest().then((nextManifest) => setManifest(nextManifest ?? DEFAULT_ASSET_PACK));
     void invoke<string | null>("get_asset_pack_path", {}).then((saved) => {
-      if (typeof saved === "string" && saved.length > 0) {
-        setAssetPackPath(saved);
-      }
+      if (typeof saved === "string" && saved.length > 0) setAssetPackPath(saved);
     });
 
     const raw = localStorage.getItem(PREFS_KEY);
@@ -61,14 +51,10 @@ export default function App() {
       try {
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         dispatch({ type: "loadPrefs", prefs: parsed.preferences as never });
-        if (typeof parsed.note === "string") {
-          dispatch({ type: "setCurrentNote", value: parsed.note });
-        }
-        if (typeof parsed.manualMessage === "string") {
-          dispatch({ type: "setManualMessage", value: parsed.manualMessage });
-        }
+        if (typeof parsed.note === "string") dispatch({ type: "setCurrentNote", value: parsed.note });
+        if (typeof parsed.manualMessage === "string") dispatch({ type: "setManualMessage", value: parsed.manualMessage });
       } catch {
-        // keep defaults
+        dispatch({ type: "setManualMessage", value: DEFAULT_MANUAL_NOTE });
       }
     } else {
       dispatch({ type: "setManualMessage", value: DEFAULT_MANUAL_NOTE });
@@ -85,66 +71,29 @@ export default function App() {
   }, [state.preferences]);
 
   useEffect(() => {
-    const stopPrevious = unlistenRef.current;
-    if (stopPrevious) {
-      stopPrevious();
-      unlistenRef.current = null;
-    }
-
-    if (!isTauriEnv()) {
-      return;
-    }
-
+    if (!isTauriEnv()) return;
     let active = true;
-    (async () => {
-      const remove = await listen<ClaudeEvent>("bean-claude-event", (event) => {
-        if (!active) return;
-        const payload = event.payload;
-        const current = stateRef.current;
-        if (!payload || typeof payload.timestamp !== "string") {
-          return;
-        }
+    void listen<ClaudeEvent>("bean-claude-event", (event) => {
+      if (!active) return;
+      const payload = event.payload;
+      const current = stateRef.current;
+      if (!payload || typeof payload.timestamp !== "string") return;
 
-        const next = nextStateFromEvent(payload, current);
-        dispatch({
-          type: "setBean",
-          state: next.beanState,
-          statusText: next.statusText,
-          session: payload.session,
-          source: payload.source as "chat" | "cowork" | "system",
-        });
-
-        if (next.beanState === "happy") {
-          if (payload.timestamp !== lastCompletedTs.current && next.preferences.lastCompletedAt !== payload.timestamp) {
-            if (next.preferences.soundEnabled && !next.muted) {
-              playTone();
-            }
-            if (next.preferences.soundEnabled && "Notification" in window) {
-              const notify = () =>
-                new Notification("Bean", {
-                  body: `${payload.source.toUpperCase()} session ${payload.session ?? "task"} completed`,
-                });
-              if (Notification.permission === "granted") {
-                notify();
-              } else if (Notification.permission !== "denied") {
-                void Notification.requestPermission().then((perm) => {
-                  if (perm === "granted") notify();
-                });
-              }
-            }
-            lastCompletedTs.current = payload.timestamp;
-            dispatch({ type: "setCurrentNote", value: current.preferences.currentNote });
-          }
-        }
-
-        if (payload.status === "unavailable") {
-          dispatch({ type: "setUnavailable", unavailable: true });
-        } else {
-          dispatch({ type: "setUnavailable", unavailable: false });
-        }
+      const next = nextStateFromEvent(payload, current);
+      dispatch({
+        type: "setBean",
+        state: next.beanState,
+        statusText: next.statusText,
+        session: payload.session,
+        source: payload.source as "chat" | "cowork" | "system",
       });
-      unlistenRef.current = remove;
-    })();
+
+      if (next.beanState === "happy" && payload.timestamp !== lastCompletedTs.current && next.preferences.lastCompletedAt !== payload.timestamp) {
+        if (next.preferences.soundEnabled && !next.muted) playTone();
+        lastCompletedTs.current = payload.timestamp;
+      }
+      dispatch({ type: "setUnavailable", unavailable: payload.status === "unavailable" });
+    }).then((remove) => { unlistenRef.current = remove; });
 
     return () => {
       active = false;
@@ -154,17 +103,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isTauriEnv()) return;
-    void invoke("start_observer", {}).catch(() => {
-      dispatch({ type: "setUnavailable", unavailable: true });
-    });
-    return () => {
-      void invoke("stop_observer", {});
-    };
-  }, []);
+    if (!isTauriEnv() || !state.preferences.welcomeShown) return;
+    void invoke("start_observer", {}).catch(() => dispatch({ type: "setUnavailable", unavailable: true }));
+    return () => { void invoke("stop_observer", {}); };
+  }, [state.preferences.welcomeShown]);
 
   const mappedAsset = useMemo(() => {
-    const key = normalizeStatusForAsset(state.beanState);
     const source = { ...manifest.states } as BeanAssetState;
     return {
       idle: source.idle,
@@ -188,20 +132,34 @@ export default function App() {
 
   const handleDrag = async () => {
     if (!isTauriEnv()) return;
-    await appWindow.startDragging();
+    try { await appWindow.startDragging(); } catch { /* the native drag-region attribute remains available */ }
   };
 
+  const connectClaude = async () => {
+    if (isTauriEnv()) {
+      try { await invoke("request_accessibility_permission"); } catch { /* observer will surface unavailable state */ }
+    }
+    dispatch({ type: "setWelcomeShown" });
+  };
+
+  const currentAsset = mappedAsset[normalizeStatusForAsset(state.beanState)];
+
   return (
-    <div className="app-shell">
-      <main className="shell-content">
-        <BeanCompanion
-          state={state.beanState}
-          statusText={state.statusText}
-          source={state.source}
-          assets={mappedAsset}
-          onDragStart={handleDrag}
-        />
-      </main>
+    <div className={`app-shell${state.preferences.welcomeShown ? "" : " app-welcome"}`}>
+      {state.preferences.welcomeShown ? (
+        <main className="shell-content">
+          <BeanCompanion
+            state={state.beanState}
+            statusText={state.statusText}
+            source={state.source}
+            session={state.session}
+            asset={currentAsset}
+            onDragStart={handleDrag}
+          />
+        </main>
+      ) : (
+        <WelcomeDialog onConnect={() => void connectClaude()} />
+      )}
     </div>
   );
 }

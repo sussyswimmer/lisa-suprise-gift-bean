@@ -100,16 +100,19 @@ fn quit_app(app: AppHandle) {
 }
 
 fn resolve_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().resource_dir().map_err(|e| format!("resource dir missing: {e}"))?;
-    let helper_in_resources = dir.join("helpers").join("bean-claude-observer");
-    let fallback = dir.join("bean-claude-observer");
-    if helper_in_resources.exists() {
-        return Ok(helper_in_resources);
+    let resources = app.path().resource_dir().map_err(|e| format!("resource dir missing: {e}"))?;
+    // Tauri packages `externalBin` sidecars next to the app executable on macOS.
+    // Development and older bundles can place the helper under Resources instead.
+    let candidates = [
+        resources.join("helpers").join("bean-claude-observer"),
+        resources.join("bean-claude-observer"),
+        resources.parent().map(|contents| contents.join("MacOS").join("bean-claude-observer")).unwrap_or_default(),
+    ];
+
+    if let Some(path) = candidates.iter().find(|path| path.exists()) {
+        return Ok(path.clone());
     }
-    if fallback.exists() {
-        return Ok(fallback);
-    }
-    Err(format!("helper not found at {helper_in_resources:?} or {fallback:?}"))
+    Err(format!("bundled Accessibility helper was not found; checked {candidates:?}"))
 }
 
 fn main() {
