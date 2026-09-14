@@ -13,11 +13,17 @@ interface BeanCompanionProps {
 
 function bubbleFor(state: BeanState, source: string, statusText: string, session: string | null, preview: string | null) {
   const snippet = preview?.replace(/\s+/g, " ").trim().slice(0, 96);
-  if (state === "thinking") return { title: snippet ? "You asked Claude Code" : `${source === "claude_code" ? "Claude Code" : source === "cowork" ? "Cowork" : "Claude"} is working`, detail: snippet ?? "Bean is typing along…" };
+  if (state === "thinking") return {
+    title: `${source === "claude_code" ? "Claude Code" : source === "cowork" ? "Cowork" : "Claude"} is working`,
+    detail: snippet ?? "Bean is typing along…",
+  };
   if (state === "happy") return { title: "Reply is ready!", detail: snippet ?? "Bean did a little jump." };
   if (state === "noticed") return { title: "Claude needs you", detail: "There is an action waiting." };
   if (state === "message") return { title: "Claude paused", detail: statusText };
-  if (state === "sleepy") return { title: "Bean is waiting", detail: "Open Claude Desktop to begin." };
+  if (state === "sleepy") return {
+    title: "Bean is waiting",
+    detail: statusText.toLowerCase().includes("accessibility") ? statusText : "Open Claude Desktop to begin.",
+  };
   return { title: session ? "Claude is ready" : "Bean is here", detail: statusText };
 }
 

@@ -50,6 +50,12 @@ jobs:
           tauriScript: npx tauri
           projectPath: ./src-tauri
           args: --target ${{ matrix.target }}
+      - name: Verify bundled Accessibility helper
+        shell: bash
+        run: |
+          helper="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Bean.app/Contents/MacOS/bean-claude-observer"
+          test -x "$helper"
+          "$helper" --request-permission | grep -q '"source":"system"'
       - name: Emit checksums
         run: |
           shasum -a 256 src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg > \

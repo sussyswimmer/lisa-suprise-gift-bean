@@ -102,6 +102,35 @@ func visibleLabels(in root: AXUIElement, maxNodes: Int = 700) -> [String] {
   return Array(Set(labels))
 }
 
+func conversationPreview(in root: AXUIElement, maxNodes: Int = 900) -> String? {
+  var candidates = [String]()
+  var queue = [root]
+  var index = 0
+
+  while index < queue.count && index < maxNodes {
+    let element = queue[index]
+    index += 1
+    let role = stringValue(element, kAXRoleAttribute as CFString) ?? ""
+    if role == (kAXStaticTextRole as String) || role == (kAXTextAreaRole as String) {
+      if let text = stringValue(element, kAXValueAttribute as CFString)?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+         text.count >= 2,
+         !text.hasPrefix("Claude can make mistakes") {
+        candidates.append(text)
+      }
+    }
+
+    var childrenValue: CFTypeRef?
+    if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenValue) == .success,
+       let children = childrenValue as? [AXUIElement] {
+      queue.append(contentsOf: children)
+    }
+  }
+
+  guard let latest = candidates.last else { return nil }
+  return String(latest.prefix(240))
+}
+
 func sourceFor(labels: [String]) -> String {
   labels.contains(where: { $0.contains("cowork") }) ? "cowork" : "chat"
 }
@@ -229,7 +258,7 @@ func pollAccessibility(for bundleID: String) -> Bool {
   }
   let source = sourceFor(labels: labels)
   let status = transitionStatus(directStatus(from: labels), trackerKey: trackerKey)
-  emit(source, sessionFrom(title: title), status)
+  emit(source, sessionFrom(title: title), status, conversationPreview(in: window))
   return true
 }
 
@@ -284,9 +313,7 @@ while true {
       _ = requestAccessibilityPermission()
       didRequestAccessibilityPermission = true
     }
-    if !hasClaudeCodeHooks {
-      emit("system", nil, "unavailable")
-    }
+    emit("system", nil, "unavailable")
     Thread.sleep(forTimeInterval: 1.2)
     continue
   }

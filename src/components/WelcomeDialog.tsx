@@ -1,10 +1,12 @@
 interface WelcomeDialogProps {
   showContent: boolean;
+  connecting: boolean;
+  connectionError: string;
   onShowContentChange: (value: boolean) => void;
   onConnect: () => void;
 }
 
-export default function WelcomeDialog({ showContent, onShowContentChange, onConnect }: WelcomeDialogProps) {
+export default function WelcomeDialog({ showContent, connecting, connectionError, onShowContentChange, onConnect }: WelcomeDialogProps) {
   return (
     <main className="welcome-dialog">
       <span className="welcome-pixel" aria-hidden="true">🐾</span>
@@ -15,7 +17,8 @@ export default function WelcomeDialog({ showContent, onShowContentChange, onConn
         <span>Show my Claude Code prompts and replies in Bean’s bubbles.</span>
       </label>
       <p className="welcome-detail">When enabled, snippets stay on this Mac and are shown only while Bean is open.</p>
-      <button type="button" onClick={onConnect}>Connect</button>
+      <button type="button" onClick={onConnect} disabled={connecting}>{connecting ? "Connecting…" : "Connect"}</button>
+      {connectionError && <p className="connection-error" role="alert">Could not start Bean’s Mac helper: {connectionError}</p>}
       <small>Bean adds local Claude Code hooks, then asks macOS for optional Desktop Accessibility.</small>
     </main>
   );

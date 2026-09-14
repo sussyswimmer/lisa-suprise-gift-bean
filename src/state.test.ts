@@ -19,6 +19,20 @@ describe("Bean state reducer", () => {
     expect(withEvent.beanState).toBe("thinking");
   });
 
+  it("carries Claude Desktop text into the visible companion state", () => {
+    const withEvent = nextStateFromEvent(
+      {
+        source: "chat",
+        session: "s2",
+        status: "working",
+        timestamp: "2026-09-14T00:00:01Z",
+        preview: "Here is the reply Claude is currently writing",
+      },
+      initialState,
+    );
+    expect(withEvent.preview).toBe("Here is the reply Claude is currently writing");
+  });
+
   it("celebrates once per event", () => {
     const first = nextStateFromEvent(
       { source: "chat", session: "s3", status: "completed", timestamp: "2026-09-14T00:00:02Z" },

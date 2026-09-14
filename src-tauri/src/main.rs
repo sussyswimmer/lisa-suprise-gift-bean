@@ -7,7 +7,7 @@ use std::thread;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size, State};
 
 #[derive(Serialize, Deserialize, Clone)]
 struct ClaudeEvent {
@@ -15,6 +15,7 @@ struct ClaudeEvent {
     session: Option<String>,
     status: String,
     timestamp: String,
+    preview: Option<String>,
 }
 
 #[derive(Default)]
@@ -154,6 +155,21 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+fn drag_window(app: AppHandle) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("main window is unavailable")?;
+    window.start_dragging().map_err(|e| format!("could not drag Bean: {e}"))
+}
+
+#[tauri::command]
+fn set_window_mode(app: AppHandle, compact: bool) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("main window is unavailable")?;
+    let (width, height) = if compact { (252.0, 216.0) } else { (360.0, 370.0) };
+    window
+        .set_size(Size::Logical(LogicalSize::new(width, height)))
+        .map_err(|e| format!("could not resize Bean: {e}"))
+}
+
 fn resolve_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
     let resources = app.path().resource_dir().map_err(|e| format!("resource dir missing: {e}"))?;
     // Tauri packages `externalBin` sidecars next to the app executable on macOS.
@@ -180,6 +196,8 @@ fn main() {
             get_asset_pack_path,
             request_accessibility_permission,
             install_claude_code_hooks,
+            drag_window,
+            set_window_mode,
             quit_app
         ])
         .setup(|app| {

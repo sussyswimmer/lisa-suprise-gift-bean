@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { LogicalSize } from "@tauri-apps/api/dpi";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
 import BeanCompanion from "./components/BeanCompanion";
@@ -12,8 +10,6 @@ import { DEFAULT_ASSET_PACK, loadManifest, normalizeStatusForAsset } from "./bea
 
 const PREFS_KEY = "bean.preferences.v1";
 const DEFAULT_MANUAL_NOTE = "Official Bean report: you are very loved.";
-const appWindow = getCurrentWindow();
-
 function playTone() {
   if (typeof AudioContext === "undefined") return;
   const context = new AudioContext();
@@ -27,10 +23,6 @@ function playTone() {
   osc.stop(context.currentTime + 0.25);
 }
 
-function isTauriEnv() {
-  return typeof window !== "undefined" && typeof (window as Window & { __TAURI__?: unknown }).__TAURI__ !== "undefined";
-}
-
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
@@ -39,14 +31,18 @@ export default function App() {
   const lastCompletedTs = useRef<string>("");
   const [assetPackPath, setAssetPackPath] = useState("");
   const [showContent, setShowContent] = useState(true);
+  const [connecting, setConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState("");
 
   useEffect(() => { stateRef.current = state; }, [state]);
 
   useEffect(() => {
     void loadManifest().then((nextManifest) => setManifest(nextManifest ?? DEFAULT_ASSET_PACK));
-    void invoke<string | null>("get_asset_pack_path", {}).then((saved) => {
-      if (typeof saved === "string" && saved.length > 0) setAssetPackPath(saved);
-    });
+    if (isTauri()) {
+      void invoke<string | null>("get_asset_pack_path", {}).then((saved) => {
+        if (typeof saved === "string" && saved.length > 0) setAssetPackPath(saved);
+      });
+    }
 
     const raw = localStorage.getItem(PREFS_KEY);
     if (raw) {
@@ -64,9 +60,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isTauriEnv()) return;
-    const size = state.preferences.welcomeShown ? new LogicalSize(252, 216) : new LogicalSize(360, 370);
-    void appWindow.setSize(size);
+    if (!isTauri()) return;
+    void invoke("set_window_mode", { compact: state.preferences.welcomeShown });
   }, [state.preferences.welcomeShown]);
   useEffect(() => {
     localStorage.setItem(PREFS_KEY, JSON.stringify({
@@ -78,7 +73,7 @@ export default function App() {
   }, [state.preferences]);
 
   useEffect(() => {
-    if (!isTauriEnv()) return;
+    if (!isTauri()) return;
     let active = true;
     void listen<ClaudeEvent>("bean-claude-event", (event) => {
       if (!active) return;
@@ -111,7 +106,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isTauriEnv() || !state.preferences.welcomeShown) return;
+    if (!isTauri() || !state.preferences.welcomeShown) return;
     void invoke("start_observer", {}).catch(() => dispatch({ type: "setUnavailable", unavailable: true }));
     return () => { void invoke("stop_observer", {}); };
   }, [state.preferences.welcomeShown]);
@@ -139,16 +134,27 @@ export default function App() {
   }, [manifest, assetPackPath]);
 
   const handleDrag = async () => {
-    if (!isTauriEnv()) return;
-    try { await appWindow.startDragging(); } catch { /* the native drag-region attribute remains available */ }
+    if (!isTauri()) return;
+    await invoke("drag_window");
   };
 
   const connectClaude = async () => {
-    if (isTauriEnv()) {
-      try { await invoke("install_claude_code_hooks", { includeContent: showContent }); } catch { /* settings are left unchanged if they cannot be safely updated */ }
-      try { await invoke("request_accessibility_permission"); } catch { /* observer will surface unavailable state */ }
+    if (!isTauri()) return;
+    setConnecting(true);
+    setConnectionError("");
+    try {
+      try {
+        await invoke("install_claude_code_hooks", { includeContent: showContent });
+      } catch {
+        // Claude Code hooks are optional; Claude Desktop Accessibility can still connect.
+      }
+      await invoke("request_accessibility_permission");
+      dispatch({ type: "setWelcomeShown" });
+    } catch (error) {
+      setConnectionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setConnecting(false);
     }
-    dispatch({ type: "setWelcomeShown" });
   };
 
   const currentAsset = mappedAsset[normalizeStatusForAsset(state.beanState)];
@@ -168,7 +174,13 @@ export default function App() {
           />
         </main>
       ) : (
-        <WelcomeDialog showContent={showContent} onShowContentChange={setShowContent} onConnect={() => void connectClaude()} />
+        <WelcomeDialog
+          showContent={showContent}
+          connecting={connecting}
+          connectionError={connectionError}
+          onShowContentChange={setShowContent}
+          onConnect={() => void connectClaude()}
+        />
       )}
     </div>
   );

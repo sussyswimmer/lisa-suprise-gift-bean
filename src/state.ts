@@ -164,6 +164,7 @@ export function nextStateFromEvent(event: ClaudeEvent, now: CompanionState): Com
       beanState: "thinking",
       statusText: `${event.source === "claude_code" ? "Claude Code" : event.source === "chat" ? "Chat" : "Cowork"} is running`,
       lastStatusTs: event.timestamp,
+      preview: event.preview ?? now.preview,
     };
   }
 
