@@ -24,7 +24,6 @@ let supportedApps = [
   "com.anthropic.claude-cowork",
 ]
 var trackers = [String: SessionTracker]()
-var didRequestAccessibilityPermission = false
 var claudeCodeEventOffset: UInt64?
 var claudeCodeHooksAvailable = false
 
@@ -313,10 +312,6 @@ if args.contains("--simulate") {
 while true {
   let hasClaudeCodeHooks = pollClaudeCodeHooks() || claudeCodeHooksAvailable
   guard isAccessibilityTrusted() else {
-    if !didRequestAccessibilityPermission {
-      _ = requestAccessibilityPermission()
-      didRequestAccessibilityPermission = true
-    }
     emit("system", nil, "unavailable")
     Thread.sleep(forTimeInterval: 1.2)
     continue

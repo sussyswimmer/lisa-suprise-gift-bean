@@ -30,7 +30,7 @@ struct BeanState {
 }
 
 #[tauri::command]
-async fn start_observer(state: State<'_, BeanState>, app: AppHandle) -> Result<String, String> {
+fn start_observer(state: State<'_, BeanState>, app: AppHandle) -> Result<String, String> {
     let mut running = state.observer.child.lock().map_err(|e| format!("observer lock failed: {e}"))?;
     if running.is_some() {
         return Ok("already_running".into());
@@ -221,6 +221,13 @@ fn main() {
             quit_app
         ])
         .setup(|app| {
+            // Start the observer from the native process. This keeps monitoring
+            // alive even if the webview restores an existing session before its
+            // React effects have registered.
+            let app_handle = app.handle().clone();
+            let state = app.state::<BeanState>();
+            let _ = start_observer(state, app_handle);
+
             if let Some(main_window) = app.get_webview_window("main") {
                 let _ = main_window.set_always_on_top(true);
             }
