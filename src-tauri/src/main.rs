@@ -179,14 +179,26 @@ fn set_window_mode(app: AppHandle, compact: bool) -> Result<(), String> {
 }
 
 fn resolve_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let resources = app.path().resource_dir().map_err(|e| format!("resource dir missing: {e}"))?;
-    // Tauri packages `externalBin` sidecars next to the app executable on macOS.
-    // Development and older bundles can place the helper under Resources instead.
-    let candidates = [
-        resources.join("helpers").join("bean-claude-observer"),
-        resources.join("bean-claude-observer"),
-        resources.parent().map(|contents| contents.join("MacOS").join("bean-claude-observer")).unwrap_or_default(),
-    ];
+    let mut candidates = Vec::new();
+
+    // Tauri's resource directory differs between a development run and a macOS
+    // app bundle. Keep these locations for both cases.
+    if let Ok(resources) = app.path().resource_dir() {
+        candidates.push(resources.join("helpers").join("bean-claude-observer"));
+        candidates.push(resources.join("bean-claude-observer"));
+        if let Some(contents) = resources.parent() {
+            candidates.push(contents.join("MacOS").join("bean-claude-observer"));
+        }
+    }
+
+    // `externalBin` is packaged next to the main executable in a macOS DMG.
+    // Resolve from the live executable rather than assuming a Resources folder:
+    // a minimal bundle need not contain one at all.
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(executable_dir) = executable.parent() {
+            candidates.push(executable_dir.join("bean-claude-observer"));
+        }
+    }
 
     if let Some(path) = candidates.iter().find(|path| path.exists()) {
         return Ok(path.clone());
