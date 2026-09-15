@@ -148,7 +148,10 @@ export default function App() {
       } catch {
         // Claude Code hooks are optional; Claude Desktop Accessibility can still connect.
       }
-      await invoke("request_accessibility_permission");
+      const accessibilityGranted = await invoke<boolean>("request_accessibility_permission");
+      if (!accessibilityGranted) {
+        throw new Error("Allow Bean in System Settings → Privacy & Security → Accessibility, then choose Connect again.");
+      }
       await invoke("start_observer", {});
       dispatch({ type: "setWelcomeShown" });
     } catch (error) {

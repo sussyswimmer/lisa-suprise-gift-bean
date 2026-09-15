@@ -83,13 +83,21 @@ async fn set_asset_pack_path(path: String, state: State<'_, BeanState>) -> Resul
 #[tauri::command]
 async fn request_accessibility_permission(app: AppHandle) -> Result<bool, String> {
     let sidecar = resolve_sidecar_path(&app)?;
-    Command::new(sidecar)
+    let output = Command::new(sidecar)
         .arg("--request-permission")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| true)
-        .map_err(|e| format!("failed to request Accessibility permission: {e}"))
+        .output()
+        .map_err(|e| format!("failed to request Accessibility permission: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "Accessibility helper exited with {}",
+            output.status
+        ));
+    }
+
+    let event: ClaudeEvent = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("Accessibility helper returned an invalid response: {e}"))?;
+    Ok(event.status != "unavailable")
 }
 
 #[tauri::command]

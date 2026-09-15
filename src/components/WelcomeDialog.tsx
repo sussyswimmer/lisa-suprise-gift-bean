@@ -18,8 +18,8 @@ export default function WelcomeDialog({ showContent, connecting, connectionError
       </label>
       <p className="welcome-detail">When enabled, snippets stay on this Mac and are shown only while Bean is open.</p>
       <button type="button" onClick={onConnect} disabled={connecting}>{connecting ? "Connecting…" : "Connect"}</button>
-      {connectionError && <p className="connection-error" role="alert">Could not start Bean’s Mac helper: {connectionError}</p>}
-      <small>Bean adds local Claude Code hooks, then asks macOS for optional Desktop Accessibility.</small>
+      {connectionError && <p className="connection-error" role="alert">{connectionError}</p>}
+      <small>Bean uses your existing Claude sign-in. It adds local Claude Code hooks, then needs Desktop Accessibility to observe Claude.</small>
     </main>
   );
 }
