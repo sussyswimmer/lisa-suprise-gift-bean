@@ -43,6 +43,9 @@
     "icon": [],
     "externalBin": [
       "helpers/bean-claude-observer"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    }
   }
 }

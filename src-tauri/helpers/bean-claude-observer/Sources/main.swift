@@ -250,7 +250,11 @@ func pollAccessibility(for bundleID: String) -> Bool {
   let appElement = AXUIElementCreateApplication(app.processIdentifier)
   guard let window = primaryWindow(appElement) else {
     resetTracker(trackerKey)
-    emit(bundleID == "com.anthropic.claude-cowork" ? "cowork" : "chat", nil, "unavailable")
+    // Accessibility was already confirmed before this function was called.
+    // A running Claude process can legitimately have no focused window (for
+    // example while it is hidden or between conversations), so this is a
+    // normal idle state rather than a permission failure.
+    emit(bundleID == "com.anthropic.claude-cowork" ? "cowork" : "chat", nil, "idle")
     return true
   }
 
@@ -322,7 +326,10 @@ while true {
     observedApp = pollAccessibility(for: bundleID) || observedApp
   }
   if !observedApp && !hasClaudeCodeHooks {
-    emit("system", nil, "unavailable")
+    // Do not turn a successfully granted Accessibility permission into an
+    // error just because Claude Desktop is not open. The UI uses unavailable
+    // specifically for a genuine TCC/Accessibility denial.
+    emit("system", nil, "idle")
   }
   Thread.sleep(forTimeInterval: 1.2)
 }
