@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
 import BeanCompanion from "./components/BeanCompanion";
@@ -10,6 +10,14 @@ import { DEFAULT_ASSET_PACK, loadManifest, normalizeStatusForAsset } from "./bea
 
 const PREFS_KEY = "bean.preferences.v1";
 const DEFAULT_MANUAL_NOTE = "Official Bean report: you are very loved.";
+
+// `window.isTauri` is only present when the optional global Tauri API is
+// enabled. The module API works without that global, so detect its internal
+// bridge instead and keep the production bundle connected to Rust.
+function isBeanDesktop() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
 function playTone() {
   if (typeof AudioContext === "undefined") return;
   const context = new AudioContext();
@@ -38,7 +46,7 @@ export default function App() {
 
   useEffect(() => {
     void loadManifest().then((nextManifest) => setManifest(nextManifest ?? DEFAULT_ASSET_PACK));
-    if (isTauri()) {
+    if (isBeanDesktop()) {
       void invoke<string | null>("get_asset_pack_path", {}).then((saved) => {
         if (typeof saved === "string" && saved.length > 0) setAssetPackPath(saved);
       });
@@ -60,7 +68,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isBeanDesktop()) return;
     void invoke("set_window_mode", { compact: state.preferences.welcomeShown });
   }, [state.preferences.welcomeShown]);
   useEffect(() => {
@@ -73,7 +81,7 @@ export default function App() {
   }, [state.preferences]);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isBeanDesktop()) return;
     let active = true;
     void listen<ClaudeEvent>("bean-claude-event", (event) => {
       if (!active) return;
@@ -106,7 +114,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isTauri() || !state.preferences.welcomeShown) return;
+    if (!isBeanDesktop() || !state.preferences.welcomeShown) return;
     void invoke("start_observer", {}).catch(() => dispatch({ type: "setUnavailable", unavailable: true }));
     return () => { void invoke("stop_observer", {}); };
   }, [state.preferences.welcomeShown]);
@@ -134,12 +142,12 @@ export default function App() {
   }, [manifest, assetPackPath]);
 
   const handleDrag = async () => {
-    if (!isTauri()) return;
+    if (!isBeanDesktop()) return;
     await invoke("drag_window");
   };
 
   const connectClaude = async () => {
-    if (!isTauri()) return;
+    if (!isBeanDesktop()) return;
     setConnecting(true);
     setConnectionError("");
     try {
