@@ -13,6 +13,8 @@ struct ClaudeEvent: Codable {
 struct SessionTracker {
   var sawWorking = false
   var quietPolls = 0
+  var composerFingerprint: Int?
+  var lastComposerChange: Date?
 }
 
 let supportedApps = [
@@ -168,6 +170,46 @@ func directStatus(from labels: [String]) -> String {
   return "idle"
 }
 
+func focusedComposerFingerprint(in appElement: AXUIElement) -> Int? {
+  var focusedValue: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
+        let focusedValue else {
+    return nil
+  }
+
+  let focusedElement = focusedValue as! AXUIElement
+  let role = stringValue(focusedElement, kAXRoleAttribute as CFString) ?? ""
+  guard role == (kAXTextAreaRole as String) || role == (kAXTextFieldRole as String),
+        let text = stringValue(focusedElement, kAXValueAttribute as CFString)?
+          .trimmingCharacters(in: .whitespacesAndNewlines),
+        !text.isEmpty else {
+    return nil
+  }
+
+  // Bean only needs to know that the composer changed. Keep a small local
+  // fingerprint rather than carrying the typed text into observer state.
+  return text.utf8.reduce(5381) { ($0 &* 33) &+ Int($1) }
+}
+
+func composerIsActive(in appElement: AXUIElement, trackerKey: String) -> Bool {
+  var tracker = trackers[trackerKey] ?? SessionTracker()
+  defer { trackers[trackerKey] = tracker }
+
+  guard let fingerprint = focusedComposerFingerprint(in: appElement) else {
+    tracker.composerFingerprint = nil
+    return false
+  }
+
+  if tracker.composerFingerprint != fingerprint {
+    tracker.composerFingerprint = fingerprint
+    tracker.lastComposerChange = Date()
+    return true
+  }
+
+  guard let lastChange = tracker.lastComposerChange else { return false }
+  return Date().timeIntervalSince(lastChange) < 3
+}
+
 func transitionStatus(_ observed: String, trackerKey: String) -> String {
   var tracker = trackers[trackerKey] ?? SessionTracker()
   defer { trackers[trackerKey] = tracker }
@@ -264,7 +306,9 @@ func pollAccessibility(for bundleID: String) -> Bool {
     labels.append(title.lowercased())
   }
   let source = sourceFor(labels: labels)
-  let status = transitionStatus(directStatus(from: labels), trackerKey: trackerKey)
+  let observedStatus = directStatus(from: labels)
+  let typing = observedStatus == "idle" && composerIsActive(in: appElement, trackerKey: trackerKey)
+  let status = typing ? "message" : transitionStatus(observedStatus, trackerKey: trackerKey)
   emit(source, sessionFrom(title: title), status, conversationPreview(in: window))
   return true
 }

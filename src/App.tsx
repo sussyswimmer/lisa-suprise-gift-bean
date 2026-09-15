@@ -122,6 +122,15 @@ export default function App() {
   }, [applyObserverEvent]);
 
   useEffect(() => {
+    const receiveNativeStatus = (event: Event) => {
+      const payload = (event as CustomEvent<ClaudeEvent>).detail;
+      applyObserverEvent(payload);
+    };
+    window.addEventListener("bean-observer-status", receiveNativeStatus);
+    return () => window.removeEventListener("bean-observer-status", receiveNativeStatus);
+  }, [applyObserverEvent]);
+
+  useEffect(() => {
     if (!isBeanDesktop() || !state.preferences.welcomeShown) return;
     let active = true;
     const syncLatestObserverStatus = async () => {

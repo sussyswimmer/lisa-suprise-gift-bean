@@ -30,6 +30,23 @@ struct BeanState {
     asset_pack_path: Mutex<Option<String>>,
 }
 
+fn publish_observer_event(app: &AppHandle, event: &ClaudeEvent) {
+    // Keep the normal Tauri event for consumers that use the module API.
+    let _ = app.emit("bean-claude-event", event);
+
+    // WebKit can finish restoring the React application after the first native
+    // event was emitted. Dispatch a DOM event as a second, direct delivery path
+    // so the visible companion always catches the current observer state.
+    let Ok(event_json) = serde_json::to_string(event) else { return };
+    let Ok(event_literal) = serde_json::to_string(&event_json) else { return };
+    let script = format!(
+        "window.dispatchEvent(new CustomEvent('bean-observer-status', {{ detail: JSON.parse({event_literal}) }}));"
+    );
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.eval(script);
+    }
+}
+
 #[tauri::command]
 fn start_observer(state: State<'_, BeanState>, app: AppHandle) -> Result<String, String> {
     let mut running = state.observer.child.lock().map_err(|e| format!("observer lock failed: {e}"))?;
@@ -56,7 +73,7 @@ fn start_observer(state: State<'_, BeanState>, app: AppHandle) -> Result<String,
                     if let Ok(mut last_event) = observer.last_event.lock() {
                         *last_event = Some(event.clone());
                     }
-                    let _ = emit_target.emit("bean-claude-event", event);
+                    publish_observer_event(&emit_target, &event);
                 }
             }
         }

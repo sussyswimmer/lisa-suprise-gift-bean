@@ -19,6 +19,15 @@ describe("Bean state reducer", () => {
     expect(withEvent.beanState).toBe("thinking");
   });
 
+  it("reacts when the user starts writing in Claude", () => {
+    const withEvent = nextStateFromEvent(
+      { source: "chat", session: "s2", status: "message", timestamp: "2026-09-14T00:00:01Z" },
+      initialState,
+    );
+    expect(withEvent.beanState).toBe("message");
+    expect(withEvent.statusText).toBe("You are writing to Claude");
+  });
+
   it("clears a previous permission warning when monitoring resumes", () => {
     const blocked = reducer(initialState, { type: "setUnavailable", unavailable: true });
     const resumed = reducer(blocked, { type: "setUnavailable", unavailable: false });

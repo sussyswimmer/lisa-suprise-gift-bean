@@ -181,6 +181,17 @@ export function nextStateFromEvent(event: ClaudeEvent, now: CompanionState): Com
   if (status === "reply") {
     return { ...now, unavailable: false, source: event.source, session: event.session, beanState: "idle", statusText: "Claude replied", lastStatusTs: event.timestamp, preview: event.preview ?? null };
   }
+  if (status === "message") {
+    return {
+      ...now,
+      unavailable: false,
+      source: event.source,
+      session: event.session,
+      beanState: "message",
+      statusText: "You are writing to Claude",
+      lastStatusTs: event.timestamp,
+    };
+  }
   if (status === "completed") {
     const eventKey = buildDedupKey(event);
     const alreadySeen = now.preferences.lastEventKey === eventKey;
