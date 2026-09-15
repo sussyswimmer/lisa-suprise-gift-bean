@@ -172,7 +172,7 @@ fn drag_window(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn set_window_mode(app: AppHandle, compact: bool) -> Result<(), String> {
     let window = app.get_webview_window("main").ok_or("main window is unavailable")?;
-    let (width, height) = if compact { (252.0, 216.0) } else { (360.0, 370.0) };
+    let (width, height) = if compact { (272.0, 248.0) } else { (360.0, 370.0) };
     window
         .set_size(Size::Logical(LogicalSize::new(width, height)))
         .map_err(|e| format!("could not resize Bean: {e}"))

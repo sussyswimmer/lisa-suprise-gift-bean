@@ -1,114 +1,102 @@
-import { useEffect, useState } from "react";
-
 interface ControlPanelProps {
-  isPaused: boolean;
-  isSoundEnabled: boolean;
-  isPhotoMode: boolean;
-  manualMessage: string;
-  note: string;
-  hasPermission: boolean;
+  open: boolean;
+  unavailable: boolean;
+  paused: boolean;
+  soundEnabled: boolean;
+  showContent: boolean;
+  checkingAccess: boolean;
+  accessMessage: string;
+  onClose: () => void;
   onPauseToggle: () => void;
   onSoundToggle: () => void;
-  onRequestGrant: () => void;
-  onQuit: () => void;
-  onHide: () => void;
-  onPhotoMode: () => void;
-  onManualMessage: (next: string) => void;
-  onNoteSave: (next: string) => void;
-  onNoteReset: () => void;
-  onAssetPackPath: (path: string) => void;
+  onShowContentChange: (value: boolean) => void;
+  onCheckAccess: () => void;
+}
+
+function CloseIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 20 20" fill="none">
+      <path d="M5.5 5.5L14.5 14.5M14.5 5.5L5.5 14.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 export default function ControlPanel({
-  isPaused,
-  isSoundEnabled,
-  isPhotoMode,
-  manualMessage,
-  note,
-  hasPermission,
+  open,
+  unavailable,
+  paused,
+  soundEnabled,
+  showContent,
+  checkingAccess,
+  accessMessage,
+  onClose,
   onPauseToggle,
   onSoundToggle,
-  onRequestGrant,
-  onQuit,
-  onHide,
-  onPhotoMode,
-  onManualMessage,
-  onNoteSave,
-  onNoteReset,
-  onAssetPackPath,
+  onShowContentChange,
+  onCheckAccess,
 }: ControlPanelProps) {
-  const [packPath, setPackPath] = useState("");
-  const [localNote, setLocalNote] = useState(note);
+  if (!open) return null;
 
-  useEffect(() => {
-    setLocalNote(note);
-  }, [note]);
+  const monitorLabel = unavailable ? "Needs access" : paused ? "Paused" : "Watching";
+  const monitorDetail = unavailable
+    ? "Bean needs Accessibility permission."
+    : paused
+      ? "Claude activity is temporarily paused."
+      : "Bean is listening for Claude activity.";
 
   return (
-    <section className="control-panel" aria-label="Bean controls">
-      <div className="controls-row">
-        <button onClick={onHide} className="control-button" type="button">
-          Hide
-        </button>
-        <button onClick={onPauseToggle} className="control-button" type="button">
-          {isPaused ? "Resume" : "Pause"}
-        </button>
-        <button onClick={onSoundToggle} className="control-button" type="button">
-          Sound {isSoundEnabled ? "on" : "off"}
-        </button>
-        <button onClick={onPhotoMode} className="control-button" type="button">
-          Photo mode {isPhotoMode ? "on" : "off"}
-        </button>
-      </div>
-      <div className="controls-row">
-        <button onClick={onRequestGrant} disabled={hasPermission} className="control-button" type="button">
-          {hasPermission ? "Accessibility permission granted" : "Grant Accessibility"}
-        </button>
-        <button onClick={onQuit} className="control-button danger" type="button">
-          Quit
-        </button>
-      </div>
-      <label className="field">
-        <span>Manual message</span>
-        <textarea
-          value={manualMessage}
-          onChange={(evt) => onManualMessage(evt.target.value)}
-          rows={2}
-          aria-label="Manual note"
-        />
-      </label>
-      <label className="field">
-        <span>Affection note</span>
-        <textarea
-          value={localNote}
-          onChange={(evt) => setLocalNote(evt.target.value)}
-          rows={2}
-          aria-label="Loving note"
-        />
-        <div className="controls-row">
-          <button onClick={() => onNoteSave(localNote)} type="button">
-          Save note
-          </button>
-          <button onClick={() => setLocalNote(note)} type="button">
-            Restore
-          </button>
-          <button onClick={onNoteReset} type="button">
-            Reset
-          </button>
+    <aside className="control-panel" aria-label="Bean settings">
+      <header className="settings-header">
+        <div>
+          <p>Bean controls</p>
+          <h2>Settings</h2>
         </div>
-      </label>
-      <label className="field">
-        <span>Asset pack path (optional)</span>
-        <input
-          value={packPath}
-          placeholder="/path/to/bean-pack"
-          onChange={(evt) => setPackPath(evt.target.value)}
-          aria-label="Asset pack path"
-        />
-        <button onClick={() => onAssetPackPath(packPath)} type="button">
-          Import pack
+        <button className="settings-close" type="button" onClick={onClose} aria-label="Close settings">
+          <CloseIcon />
         </button>
-      </label>
-    </section>
+      </header>
+
+      <div className={`settings-status${unavailable ? " is-warning" : ""}`}>
+        <span className="status-light" aria-hidden="true" />
+        <div>
+          <strong>{monitorLabel}</strong>
+          <span>{accessMessage || monitorDetail}</span>
+        </div>
+      </div>
+
+      <div className="settings-list">
+        <button className="settings-row" type="button" onClick={onPauseToggle}>
+          <span>
+            <strong>{paused ? "Resume monitoring" : "Pause monitoring"}</strong>
+            <small>{paused ? "Start watching Claude again" : "Temporarily stop activity updates"}</small>
+          </span>
+          <span className={`setting-value${paused ? " is-muted" : ""}`}>{paused ? "Paused" : "On"}</span>
+        </button>
+        <button className="settings-row" type="button" onClick={onSoundToggle}>
+          <span>
+            <strong>Completion sound</strong>
+            <small>Play a gentle chime when work finishes</small>
+          </span>
+          <span className={`setting-value${soundEnabled ? "" : " is-muted"}`}>{soundEnabled ? "On" : "Off"}</span>
+        </button>
+        <label className="settings-row settings-checkbox">
+          <span>
+            <strong>Claude Code previews</strong>
+            <small>Allow short snippets in Bean's speech bubble</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={showContent}
+            onChange={(event) => onShowContentChange(event.target.checked)}
+            aria-label="Show Claude Code previews"
+          />
+          <span className="checkmark" aria-hidden="true" />
+        </label>
+      </div>
+
+      <button className="accessibility-check" type="button" onClick={onCheckAccess} disabled={checkingAccess}>
+        {checkingAccess ? "Checking access…" : unavailable ? "Check Accessibility" : "Refresh connection"}
+      </button>
+    </aside>
   );
 }

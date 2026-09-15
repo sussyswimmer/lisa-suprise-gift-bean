@@ -11,8 +11,41 @@ html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
 body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperlegible", "Avenir Next", sans-serif; }
 
 .app-shell { width: 100%; height: 100%; background: transparent; user-select: none; }
-.shell-content { width: 100%; height: 100%; pointer-events: none; }
+.shell-content { position: relative; width: 100%; height: 100%; pointer-events: none; }
 .companion-area { position: relative; width: 100%; height: 100%; }
+
+.bean-topbar {
+  position: absolute;
+  z-index: 5;
+  top: 8px;
+  left: 50%;
+  width: 248px;
+  height: 31px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px 3px 7px;
+  transform: translateX(-50%);
+  border: 1.5px solid rgba(35, 58, 98, .88);
+  border-radius: 11px;
+  background: rgba(255, 250, 242, .94);
+  box-shadow: 0 3px 0 rgba(35, 58, 98, .15), 0 8px 16px rgba(29, 42, 60, .16);
+  font-family: "Courier New", monospace;
+  pointer-events: auto;
+}
+.bean-brand { display: inline-flex; align-items: center; gap: 5px; min-width: 66px; color: #243b68; font-size: 12px; font-weight: 800; letter-spacing: -.3px; }
+.bean-mark { display: block; flex: 0 0 auto; }
+.topbar-presence { display: inline-flex; align-items: center; gap: 4px; color: #57715d; font-size: 9px; font-weight: 700; white-space: nowrap; }
+.topbar-presence::before { width: 6px; height: 6px; border-radius: 50%; background: #6eaa79; box-shadow: 0 0 0 2px #e0f0e2; content: ""; }
+.topbar-presence.is-warning { color: #a95a43; }
+.topbar-presence.is-warning::before { background: #c97554; box-shadow: 0 0 0 2px #f4dfd2; }
+.topbar-presence.is-muted { color: #75808c; }
+.topbar-presence.is-muted::before { background: #8f9aa5; box-shadow: 0 0 0 2px #e6e8ea; }
+.settings-trigger, .settings-close { appearance: none; border: 0; color: #243b68; background: transparent; cursor: pointer; font: inherit; }
+.settings-trigger { display: inline-flex; align-items: center; gap: 4px; min-height: 23px; margin-left: auto; padding: 3px 6px; border-radius: 7px; font-size: 9px; font-weight: 700; }
+.settings-trigger svg { width: 14px; height: 14px; }
+.settings-trigger:hover, .settings-trigger.is-open { background: #e7eefb; }
+.settings-trigger:focus-visible, .settings-close:focus-visible, .settings-row:focus-visible, .accessibility-check:focus-visible { outline: 2px solid #4d71b2; outline-offset: 2px; }
 
 .bean-shell {
   all: unset;
@@ -35,11 +68,22 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 
 .bean-stage { width: 132px; height: 132px; position: relative; display: grid; place-items: center; }
 .bean-image { width: 128px; height: 128px; object-fit: contain; image-rendering: pixelated; -webkit-user-drag: none; }
+.idle-activity-peek { animation: idle-peek 2.3s var(--ease) both; }
+.idle-activity-hop { animation: idle-hop .9s var(--ease) both; }
+.idle-activity-boba { animation: idle-boba 4.1s var(--ease) both; }
+.boba-cup { position: absolute; right: 2px; bottom: 19px; width: 20px; height: 25px; overflow: hidden; border: 2px solid #243b68; border-radius: 3px 3px 7px 7px; background: linear-gradient(#d8a675 0 38%, #9b684c 39%); box-shadow: 2px 2px 0 rgba(35, 58, 98, .16); transform: rotate(8deg); }
+.boba-cup::before { position: absolute; top: -12px; left: 9px; width: 3px; height: 16px; border: 1.5px solid #243b68; border-radius: 2px; background: #e9b75b; content: ""; transform: rotate(-12deg); transform-origin: bottom; }
+.boba-cup i { position: absolute; top: 8px; right: 0; left: 0; height: 2px; background: #f5dcc2; }
+.boba-cup b, .boba-cup em { position: absolute; bottom: 4px; width: 4px; height: 4px; border-radius: 50%; background: #4b3533; }
+.boba-cup b { left: 3px; }
+.boba-cup em:nth-of-type(1) { left: 8px; }
+.boba-cup em:nth-of-type(2) { left: 13px; }
+.boba-cup em:nth-of-type(3) { left: 6px; bottom: 9px; }
 
 .activity-bubble {
   position: absolute;
   z-index: 2;
-  top: 8px;
+  top: 46px;
   left: 50%;
   width: 236px;
   min-height: 52px;
@@ -71,6 +115,54 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 .activity-thinking { border-color: #486eae; }
 .activity-happy { border-color: #b87831; }
 .activity-noticed { border-color: #af514d; }
+
+.control-panel {
+  position: absolute;
+  z-index: 8;
+  top: 45px;
+  right: 8px;
+  width: 248px;
+  padding: 12px;
+  border: 1.5px solid #243b68;
+  border-radius: 14px;
+  background: rgba(255, 250, 242, .985);
+  box-shadow: 0 5px 0 rgba(35, 58, 98, .18), 0 14px 28px rgba(29, 42, 60, .25);
+  color: #26334b;
+  font-family: "Atkinson Hyperlegible", "Avenir Next", sans-serif;
+  pointer-events: auto;
+}
+.settings-header { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: 9px; border-bottom: 1px solid #d8dfeb; }
+.settings-header p { margin: 0 0 1px; color: #697789; font: 700 8px/10px "Courier New", monospace; letter-spacing: .35px; text-transform: uppercase; }
+.settings-header h2 { margin: 0; font: 800 16px/18px "Courier New", monospace; letter-spacing: -.5px; }
+.settings-close { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 7px; }
+.settings-close:hover { background: #edf1f7; }
+.settings-close svg { width: 16px; height: 16px; }
+.settings-status { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 7px; padding: 8px; border: 1px solid #d6e4d7; border-radius: 9px; background: #f1f8f1; }
+.settings-status.is-warning { border-color: #eed7cb; background: #fff4ee; }
+.status-light { width: 7px; height: 7px; flex: 0 0 auto; margin-top: 4px; border-radius: 50%; background: #67a576; box-shadow: 0 0 0 3px #dcefe0; }
+.is-warning .status-light { background: #c97355; box-shadow: 0 0 0 3px #f6e1d7; }
+.settings-status strong, .settings-status span { display: block; }
+.settings-status strong { font-size: 11px; line-height: 13px; }
+.settings-status span { color: #627181; font-size: 9px; line-height: 11px; }
+.settings-list { border-top: 1px solid #e0e5ec; }
+.settings-row { position: relative; width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 1px; border: 0; border-bottom: 1px solid #e0e5ec; color: #26334b; background: transparent; text-align: left; cursor: pointer; font: inherit; }
+.settings-row:hover { color: #1a4b8b; }
+.settings-row strong, .settings-row small { display: block; }
+.settings-row strong { font-size: 11px; line-height: 13px; }
+.settings-row small { margin-top: 1px; color: #6d7886; font-size: 9px; line-height: 11px; }
+.setting-value { flex: 0 0 auto; padding: 3px 6px; border-radius: 999px; color: #2f7050; background: #e1f3e4; font: 700 8px/10px "Courier New", monospace; text-transform: uppercase; }
+.setting-value.is-muted { color: #6f7984; background: #ebedf0; }
+.settings-checkbox { cursor: pointer; }
+.settings-checkbox input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
+.checkmark { width: 28px; height: 16px; flex: 0 0 auto; border-radius: 99px; background: #aeb8c6; box-shadow: inset 0 0 0 1px rgba(35, 58, 98, .15); transition: background .18s var(--ease); }
+.checkmark::after { display: block; width: 12px; height: 12px; margin: 2px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(20, 34, 51, .25); content: ""; transition: transform .18s var(--ease); }
+.settings-checkbox input:checked + .checkmark { background: #5e8ac6; }
+.settings-checkbox input:checked + .checkmark::after { transform: translateX(12px); }
+.settings-checkbox input:focus-visible + .checkmark { outline: 2px solid #4d71b2; outline-offset: 2px; }
+.accessibility-check { width: 100%; margin-top: 10px; padding: 8px 10px; border: 1.5px solid #243b68; border-radius: 8px; color: #fff; background: #4d71b2; box-shadow: 0 2px 0 #243b68; font: 700 10px/12px "Courier New", monospace; cursor: pointer; }
+.accessibility-check:hover { background: #3f659f; }
+.accessibility-check:active { box-shadow: none; transform: translateY(2px); }
+.accessibility-check:disabled { cursor: wait; opacity: .7; }
 
 .typing-pixels, .celebration-pixels, .sleep-pixels, .attention-mark { position: absolute; pointer-events: none; font-family: "Courier New", monospace; font-weight: 900; image-rendering: pixelated; }
 .typing-pixels { right: 2px; bottom: 8px; display: flex; gap: 3px; }
@@ -109,6 +201,9 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 .welcome-dialog small { display: block; color: #617084; font-size: 9px; line-height: 11px; }
 
 @keyframes idle-breathe { 0%, 100% { transform: translateX(-50%) translateY(0) scale(1); } 50% { transform: translateX(-50%) translateY(-1px) scale(1.018, .985); } }
+@keyframes idle-peek { 0%, 100% { transform: translateX(0) rotate(0); } 30% { transform: translateX(-4px) rotate(-4deg); } 58% { transform: translateX(-4px) rotate(-4deg); } 75% { transform: translateX(1px) rotate(1deg); } }
+@keyframes idle-hop { 0% { transform: translateY(0) scale(1); } 35% { transform: translateY(-9px) scale(.96, 1.04) rotate(-2deg); } 65% { transform: translateY(0) scale(1.04, .96) rotate(2deg); } 100% { transform: translateY(0) scale(1); } }
+@keyframes idle-boba { 0%, 100% { transform: translateY(0); } 20%, 70% { transform: translateY(-1px) rotate(-1deg); } 40%, 82% { transform: translateY(0) rotate(1deg); } }
 @keyframes typing { 0%, 100% { transform: translateX(-50%) translateY(0) rotate(0); } 25% { transform: translateX(calc(-50% - 1px)) translateY(1px) rotate(-1deg); } 50% { transform: translateX(calc(-50% + 1px)) translateY(0) rotate(1deg); } 75% { transform: translateX(-50%) translateY(1px); } }
 @keyframes message { 0%, 100% { transform: translateX(-50%) scale(1); } 40% { transform: translateX(-50%) scale(1.03); } }
 @keyframes happy-jump { 0% { transform: translateX(-50%) translateY(0) scale(1.05, .95); } 38% { transform: translateX(-50%) translateY(-18px) scale(.92, 1.1) rotate(-3deg); } 70% { transform: translateX(-50%) translateY(0) scale(1.12, .88) rotate(2deg); } 100% { transform: translateX(-50%) translateY(0) scale(1); } }
@@ -120,5 +215,5 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 @keyframes sleep-pixels { 0%,100% { transform: translate(0, 2px); opacity: .45; } 50% { transform: translate(5px, -5px); opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .bean-shell, .typing-pixels i, .celebration-pixels i, .attention-mark, .sleep-pixels { animation: none !important; }
+  .bean-shell, .bean-stage, .typing-pixels i, .celebration-pixels i, .attention-mark, .sleep-pixels { animation: none !important; }
 }

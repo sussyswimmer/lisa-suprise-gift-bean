@@ -3,6 +3,8 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
 import BeanCompanion from "./components/BeanCompanion";
+import BeanMark from "./components/BeanMark";
+import ControlPanel from "./components/ControlPanel";
 import WelcomeDialog from "./components/WelcomeDialog";
 import { BeanManifest, BeanAssetState, ClaudeEvent } from "./types";
 import { initialState, nextStateFromEvent, reducer } from "./state";
@@ -41,6 +43,9 @@ export default function App() {
   const [showContent, setShowContent] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [checkingAccess, setCheckingAccess] = useState(false);
+  const [accessMessage, setAccessMessage] = useState("");
 
   useEffect(() => { stateRef.current = state; }, [state]);
 
@@ -169,12 +174,76 @@ export default function App() {
     }
   };
 
+  const toggleMonitoring = async () => {
+    const nextPaused = !state.paused;
+    dispatch({ type: "setPaused", paused: nextPaused });
+    setAccessMessage(nextPaused ? "Monitoring paused until you resume it." : "Bean is watching Claude again.");
+
+    if (!isBeanDesktop()) return;
+    try {
+      await invoke(nextPaused ? "stop_observer" : "start_observer", {});
+    } catch {
+      if (!nextPaused) {
+        dispatch({ type: "setUnavailable", unavailable: true });
+        setAccessMessage("Bean could not restart monitoring. Check Accessibility and try again.");
+      }
+    }
+  };
+
+  const checkAccessibility = async () => {
+    if (!isBeanDesktop()) {
+      setAccessMessage("Accessibility checks are available in the Bean desktop app.");
+      return;
+    }
+
+    setCheckingAccess(true);
+    setAccessMessage("");
+    try {
+      const granted = await invoke<boolean>("request_accessibility_permission");
+      if (!granted) {
+        dispatch({ type: "setUnavailable", unavailable: true });
+        setAccessMessage("Turn on Bean in System Settings → Accessibility, then check again.");
+        return;
+      }
+      await invoke("start_observer", {});
+      dispatch({ type: "setUnavailable", unavailable: false });
+      setAccessMessage("Accessibility is on. Bean is connected and listening.");
+    } catch (error) {
+      dispatch({ type: "setUnavailable", unavailable: true });
+      setAccessMessage(error instanceof Error ? error.message : "Bean could not verify Accessibility.");
+    } finally {
+      setCheckingAccess(false);
+    }
+  };
+
   const currentAsset = mappedAsset[normalizeStatusForAsset(state.beanState)];
 
   return (
     <div className={`app-shell${state.preferences.welcomeShown ? "" : " app-welcome"}`}>
       {state.preferences.welcomeShown ? (
         <main className="shell-content">
+          <header className="bean-topbar">
+            <div className="bean-brand" aria-label="Bean companion">
+              <BeanMark size={24} />
+              <span>Bean</span>
+            </div>
+            <span className={`topbar-presence${state.unavailable ? " is-warning" : state.paused ? " is-muted" : ""}`}>
+              {state.unavailable ? "Needs access" : state.paused ? "Paused" : "Watching"}
+            </span>
+            <button
+              className={`settings-trigger${settingsOpen ? " is-open" : ""}`}
+              type="button"
+              onClick={() => setSettingsOpen((open) => !open)}
+              aria-label={settingsOpen ? "Close Bean settings" : "Open Bean settings"}
+              aria-expanded={settingsOpen}
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none">
+                <path d="M9.7 3.3L10.3 2H13.7L14.3 3.3L16 4L17.4 3.5L19.8 5.9L19.2 7.4L20 9.1L21.4 9.7V13.1L20 13.7L19.2 15.4L19.8 16.9L17.4 19.3L16 18.8L14.3 19.5L13.7 20.8H10.3L9.7 19.5L8 18.8L6.6 19.3L4.2 16.9L4.8 15.4L4 13.7L2.6 13.1V9.7L4 9.1L4.8 7.4L4.2 5.9L6.6 3.5L8 4L9.7 3.3Z" stroke="currentColor" strokeWidth="1.65" strokeLinejoin="round" />
+                <circle cx="12" cy="11.4" r="3.1" stroke="currentColor" strokeWidth="1.65" />
+              </svg>
+              <span>Settings</span>
+            </button>
+          </header>
           <BeanCompanion
             state={state.beanState}
             statusText={state.statusText}
@@ -183,6 +252,20 @@ export default function App() {
             preview={state.preview}
             asset={currentAsset}
             onDragStart={handleDrag}
+          />
+          <ControlPanel
+            open={settingsOpen}
+            unavailable={state.unavailable}
+            paused={state.paused}
+            soundEnabled={state.preferences.soundEnabled}
+            showContent={showContent}
+            checkingAccess={checkingAccess}
+            accessMessage={accessMessage}
+            onClose={() => setSettingsOpen(false)}
+            onPauseToggle={() => void toggleMonitoring()}
+            onSoundToggle={() => dispatch({ type: "setSound", soundEnabled: !state.preferences.soundEnabled })}
+            onShowContentChange={setShowContent}
+            onCheckAccess={() => void checkAccessibility()}
           />
         </main>
       ) : (

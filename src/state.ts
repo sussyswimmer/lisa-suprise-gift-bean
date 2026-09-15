@@ -103,7 +103,11 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
     case "setManualMessage":
       return { ...state, preferences: { ...state.preferences, manualMessage: action.value } };
     case "setSound":
-      return { ...state, preferences: { ...state.preferences, soundEnabled: action.soundEnabled }, beanState: action.soundEnabled ? state.beanState : "soundOff" };
+      return {
+        ...state,
+        preferences: { ...state.preferences, soundEnabled: action.soundEnabled },
+        beanState: action.soundEnabled && state.beanState === "soundOff" ? "idle" : action.soundEnabled ? state.beanState : "soundOff",
+      };
     case "setPhotoMode":
       return { ...state, preferences: { ...state.preferences, photoMode: action.photoMode }, beanState: action.photoMode ? "message" : state.beanState };
     case "setWelcomeShown":

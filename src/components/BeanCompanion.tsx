@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { BeanState } from "../types";
 
 interface BeanCompanionProps {
@@ -10,6 +10,10 @@ interface BeanCompanionProps {
   preview: string | null;
   onDragStart: () => void;
 }
+
+type IdleActivity = "breathe" | "peek" | "hop" | "boba";
+
+const IDLE_ACTIVITIES: IdleActivity[] = ["breathe", "peek", "hop", "boba"];
 
 function bubbleFor(state: BeanState, source: string, statusText: string, session: string | null, preview: string | null) {
   const snippet = preview?.replace(/\s+/g, " ").trim().slice(0, 96);
@@ -28,11 +32,29 @@ function bubbleFor(state: BeanState, source: string, statusText: string, session
 }
 
 export default function BeanCompanion({ state, asset, statusText, source, session, preview, onDragStart }: BeanCompanionProps) {
+  const [idleActivity, setIdleActivity] = useState<IdleActivity>("breathe");
   const animationLabel: Record<BeanState, string> = {
     idle: "gentle idle breathing and tail wag", thinking: "typing on a tiny computer", happy: "jump celebration",
     noticed: "attention alert", message: "concerned check-in", sleepy: "sleeping breathing", soundOff: "quiet idle",
   };
   const bubble = bubbleFor(state, source, statusText, session, preview);
+  const isWaiting = state === "idle" || state === "sleepy" || state === "soundOff";
+
+  useEffect(() => {
+    if (!isWaiting) {
+      setIdleActivity("breathe");
+      return;
+    }
+
+    let timeoutId: number;
+    const chooseNextActivity = () => {
+      const choices = IDLE_ACTIVITIES.filter((activity) => activity !== idleActivity);
+      setIdleActivity(choices[Math.floor(Math.random() * choices.length)]);
+      timeoutId = window.setTimeout(chooseNextActivity, 6_500 + Math.floor(Math.random() * 4_500));
+    };
+    timeoutId = window.setTimeout(chooseNextActivity, 4_500);
+    return () => window.clearTimeout(timeoutId);
+  }, [isWaiting, idleActivity]);
 
   const startNativeDrag = (event: MouseEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;
@@ -55,8 +77,9 @@ export default function BeanCompanion({ state, asset, statusText, source, sessio
         onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void onDragStart(); }}
         aria-label={`Drag Bean — ${animationLabel[state]}`}
       >
-        <div className="bean-stage" aria-hidden="true">
+        <div className={`bean-stage idle-activity-${isWaiting ? idleActivity : "breathe"}`} aria-hidden="true">
           <img className="bean-image" src={asset} alt="" draggable={false} />
+          {isWaiting && idleActivity === "boba" && <span className="boba-cup"><i /><b /><em /><em /><em /></span>}
           {state === "thinking" && <span className="typing-pixels"><i /><i /><i /></span>}
           {state === "happy" && <span className="celebration-pixels"><i /><i /><i /><i /></span>}
           {state === "noticed" && <span className="attention-mark">!</span>}
