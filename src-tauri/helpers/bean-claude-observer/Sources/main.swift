@@ -1,6 +1,7 @@
 import ApplicationServices
 import AppKit
 import Foundation
+import Darwin
 
 struct ClaudeEvent: Codable {
   let source: String
@@ -8,6 +9,7 @@ struct ClaudeEvent: Codable {
   let status: String
   let timestamp: String
   let preview: String?
+  let reason: String?
 }
 
 struct SessionTracker {
@@ -24,15 +26,19 @@ let supportedApps = [
   "com.anthropic.claude-cowork",
 ]
 var trackers = [String: SessionTracker]()
-var claudeCodeEventOffset: UInt64?
+var claudeCodeEventOffset: UInt64 = 0
 var claudeCodeHooksAvailable = false
+var claudeCodeWorkingSessions = Set<String>()
+var lastClaudeCodeEventAt: Date?
+var claudeCodeEventsURL = FileManager.default.homeDirectoryForCurrentUser
+  .appendingPathComponent("Library/Application Support/Bean/claude-code-events")
 
 func now() -> String {
   ISO8601DateFormatter().string(from: Date())
 }
 
-func emit(_ source: String, _ session: String?, _ status: String, _ preview: String? = nil) {
-  let event = ClaudeEvent(source: source, session: session, status: status, timestamp: now(), preview: preview)
+func emit(_ source: String, _ session: String?, _ status: String, _ preview: String? = nil, reason: String? = nil) {
+  let event = ClaudeEvent(source: source, session: session, status: status, timestamp: now(), preview: preview, reason: reason)
   guard let data = try? JSONEncoder().encode(event), let line = String(data: data, encoding: .utf8) else {
     return
   }
@@ -45,7 +51,7 @@ func isAccessibilityTrusted() -> Bool {
 }
 
 func requestAccessibilityPermission() -> Bool {
-  let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+  let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
   return AXIsProcessTrustedWithOptions(options)
 }
 
@@ -202,8 +208,7 @@ func resetTracker(_ key: String) {
 }
 
 func pollClaudeCodeHooks() -> Bool {
-  let eventsURL = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent("Library/Application Support/Bean/claude-code-events")
+  let eventsURL = claudeCodeEventsURL
   guard let attributes = try? FileManager.default.attributesOfItem(atPath: eventsURL.path),
         let fileSize = attributes[.size] as? NSNumber else {
     return false
@@ -211,18 +216,14 @@ func pollClaudeCodeHooks() -> Bool {
 
   claudeCodeHooksAvailable = true
   let size = fileSize.uint64Value
-  guard let previousOffset = claudeCodeEventOffset else {
-    // Ignore events from a previous Bean run: only animate live Claude Code activity.
-    claudeCodeEventOffset = size
-    return true
-  }
-
-  let offset = size < previousOffset ? 0 : previousOffset
-  guard size > offset, let handle = try? FileHandle(forReadingFrom: eventsURL) else {
+  let offset = size < claudeCodeEventOffset ? 0 : claudeCodeEventOffset
+  guard size > offset, let handle = try? FileHandle(forUpdating: eventsURL) else {
     claudeCodeEventOffset = offset
     return true
   }
   defer { try? handle.close() }
+  guard flock(handle.fileDescriptor, LOCK_EX) == 0 else { return true }
+  defer { flock(handle.fileDescriptor, LOCK_UN) }
   try? handle.seek(toOffset: offset)
   let data = (try? handle.readToEnd()) ?? Data()
   claudeCodeEventOffset = size
@@ -230,13 +231,17 @@ func pollClaudeCodeHooks() -> Bool {
   guard let raw = String(data: data, encoding: .utf8) else { return true }
   for line in raw.split(whereSeparator: { $0.isNewline }).map(String.init) {
     if let eventData = line.data(using: .utf8), let event = try? JSONDecoder().decode(ClaudeEvent.self, from: eventData) {
+      let session = event.session ?? "unknown"
+      if event.status == "working" { claudeCodeWorkingSessions.insert(session) }
+      if ["completed", "failed", "stopped"].contains(event.status) { claudeCodeWorkingSessions.remove(session) }
+      lastClaudeCodeEventAt = Date()
       emit(event.source, event.session, event.status, event.preview)
     } else if ["working", "completed", "reply", "failed", "attention_needed", "stopped"].contains(line) {
       emit("claude_code", nil, line)
     }
   }
   // Prompt and reply text only needs a short-lived local handoff between the hook and Bean.
-  try? Data().write(to: eventsURL, options: .atomic)
+  try? handle.truncate(atOffset: 0)
   claudeCodeEventOffset = 0
   return true
 }
@@ -248,13 +253,12 @@ func pollAccessibility(for bundleID: String) -> Bool {
 
   let trackerKey = bundleID
   let appElement = AXUIElementCreateApplication(app.processIdentifier)
+  // Electron does not always expose Chromium's content tree until assistive
+  // software explicitly enables it. This only changes Claude's AX support.
+  _ = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
   guard let window = primaryWindow(appElement) else {
     resetTracker(trackerKey)
-    // Accessibility was already confirmed before this function was called.
-    // A running Claude process can legitimately have no focused window (for
-    // example while it is hidden or between conversations), so this is a
-    // normal idle state rather than a permission failure.
-    emit(bundleID == "com.anthropic.claude-cowork" ? "cowork" : "chat", nil, "idle")
+    emit(bundleID == "com.anthropic.claude-cowork" ? "cowork" : "chat", nil, "unavailable", reason: "window_unavailable")
     return true
   }
 
@@ -263,6 +267,11 @@ func pollAccessibility(for bundleID: String) -> Bool {
   if let title {
     labels.append(title.lowercased())
   }
+  guard labels.contains("axwebarea") else {
+    resetTracker(trackerKey)
+    emit("chat", sessionFrom(title: title), "unavailable", reason: "interface_unavailable")
+    return true
+  }
   let source = sourceFor(labels: labels)
   let status = transitionStatus(directStatus(from: labels), trackerKey: trackerKey)
   emit(source, sessionFrom(title: title), status, conversationPreview(in: window))
@@ -270,11 +279,11 @@ func pollAccessibility(for bundleID: String) -> Bool {
 }
 
 func hookPreview(from input: Data, includeContent: Bool) -> (String?, String?) {
-  guard includeContent,
-        let object = try? JSONSerialization.jsonObject(with: input) as? [String: Any] else { return (nil, nil) }
+  guard let object = try? JSONSerialization.jsonObject(with: input) as? [String: Any] else { return (nil, nil) }
   let session = object["session_id"] as? String
-  for key in ["prompt", "message", "text", "content"] {
-    if let value = object[key] as? String, !value.isEmpty { return (session, value) }
+  guard includeContent else { return (session, nil) }
+  for key in ["prompt", "last_assistant_message", "delta", "message", "text", "content"] {
+    if let value = object[key] as? String, !value.isEmpty { return (session, String(value.prefix(240))) }
   }
   return (session, nil)
 }
@@ -282,25 +291,61 @@ func hookPreview(from input: Data, includeContent: Bool) -> (String?, String?) {
 func appendClaudeCodeHook(status: String, includeContent: Bool) {
   let input = FileHandle.standardInput.readDataToEndOfFile()
   let (session, preview) = hookPreview(from: input, includeContent: includeContent)
-  let event = ClaudeEvent(source: "claude_code", session: session, status: status, timestamp: now(), preview: preview)
+  let event = ClaudeEvent(source: "claude_code", session: session, status: status, timestamp: now(), preview: preview, reason: nil)
   guard let encoded = try? JSONEncoder().encode(event) else { return }
-  let eventsURL = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent("Library/Application Support/Bean/claude-code-events")
+  let eventsURL = claudeCodeEventsURL
   try? FileManager.default.createDirectory(at: eventsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
   if !FileManager.default.fileExists(atPath: eventsURL.path) { FileManager.default.createFile(atPath: eventsURL.path, contents: nil) }
   if let handle = try? FileHandle(forWritingTo: eventsURL) {
     defer { try? handle.close() }
+    guard flock(handle.fileDescriptor, LOCK_EX) == 0 else { return }
+    defer { flock(handle.fileDescriptor, LOCK_UN) }
     try? handle.seekToEnd()
     try? handle.write(encoded + Data("\n".utf8))
   }
 }
 let args = CommandLine.arguments
+if args.contains("--self-test") {
+  let testDir = FileManager.default.temporaryDirectory.appendingPathComponent("bean-hook-test-\(UUID().uuidString)")
+  try FileManager.default.createDirectory(at: testDir, withIntermediateDirectories: true)
+  defer { try? FileManager.default.removeItem(at: testDir) }
+  claudeCodeEventsURL = testDir.appendingPathComponent("events")
+  precondition(!pollClaudeCodeHooks(), "No queue should mean no event")
+  let prompt = ClaudeEvent(source: "claude_code", session: "test", status: "working", timestamp: now(), preview: nil, reason: nil)
+  try (JSONEncoder().encode(prompt) + Data("\n".utf8)).write(to: claudeCodeEventsURL)
+  precondition(pollClaudeCodeHooks(), "The first live queue must be read")
+  precondition(claudeCodeWorkingSessions.contains("test"), "The first prompt must not be discarded")
+  let stop = ClaudeEvent(source: "claude_code", session: "test", status: "completed", timestamp: now(), preview: nil, reason: nil)
+  try (JSONEncoder().encode(stop) + Data("\n".utf8)).write(to: claudeCodeEventsURL)
+  _ = pollClaudeCodeHooks()
+  precondition(claudeCodeWorkingSessions.isEmpty, "Stop must clear the working session")
+  let input = Data(#"{"session_id":"test","last_assistant_message":"Final reply"}"#.utf8)
+  precondition(hookPreview(from: input, includeContent: true).1 == "Final reply", "Stop must read the documented reply field")
+  precondition(hookPreview(from: input, includeContent: false).0 == "test", "Status-only hooks must retain session identity")
+  precondition(hookPreview(from: input, includeContent: false).1 == nil, "Status-only hooks must not expose text")
+  print("Bean helper self-test passed")
+  try? FileManager.default.removeItem(at: testDir)
+  exit(0)
+}
 if let hookIndex = args.firstIndex(of: "--claude-code-hook"), args.indices.contains(hookIndex + 1) {
   appendClaudeCodeHook(status: args[hookIndex + 1], includeContent: args.contains("content"))
   exit(0)
 }
 if args.contains("--request-permission") {
-  emit("system", nil, requestAccessibilityPermission() ? "idle" : "unavailable")
+  let granted = requestAccessibilityPermission()
+  emit("system", nil, granted ? "idle" : "unavailable", reason: granted ? nil : "permission_denied")
+  exit(0)
+}
+if args.contains("--connection-status") {
+  guard isAccessibilityTrusted() else {
+    emit("system", nil, "unavailable", reason: "permission_denied")
+    exit(0)
+  }
+  var found = false
+  for bundleID in supportedApps {
+    found = pollAccessibility(for: bundleID) || found
+  }
+  if !found { emit("system", nil, "unavailable", reason: "claude_not_running") }
   exit(0)
 }
 
@@ -313,10 +358,23 @@ if args.contains("--simulate") {
   }
 }
 
+// Ignore events left over before this observer starts, without discarding the
+// first live prompt when the events file is created later.
+let existingEventsPath = claudeCodeEventsURL.path
+if let attributes = try? FileManager.default.attributesOfItem(atPath: existingEventsPath),
+   let size = attributes[.size] as? NSNumber {
+  claudeCodeEventOffset = size.uint64Value
+}
+
 while true {
   let hasClaudeCodeHooks = pollClaudeCodeHooks() || claudeCodeHooksAvailable
+  // Desktop permission or idle polling must not erase live Claude Code work.
+  if !claudeCodeWorkingSessions.isEmpty || (lastClaudeCodeEventAt.map { Date().timeIntervalSince($0) < 4 } ?? false) {
+    Thread.sleep(forTimeInterval: 1.2)
+    continue
+  }
   guard isAccessibilityTrusted() else {
-    emit("system", nil, "unavailable")
+    emit("system", nil, "unavailable", reason: "permission_denied")
     Thread.sleep(forTimeInterval: 1.2)
     continue
   }
@@ -326,10 +384,8 @@ while true {
     observedApp = pollAccessibility(for: bundleID) || observedApp
   }
   if !observedApp && !hasClaudeCodeHooks {
-    // Do not turn a successfully granted Accessibility permission into an
-    // error just because Claude Desktop is not open. The UI uses unavailable
-    // specifically for a genuine TCC/Accessibility denial.
-    emit("system", nil, "idle")
+    trackers.removeAll()
+    emit("system", nil, "unavailable", reason: "claude_not_running")
   }
   Thread.sleep(forTimeInterval: 1.2)
 }

@@ -117,6 +117,8 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 .activity-noticed { border-color: #af514d; }
 
 .control-panel {
+  max-height: calc(100% - 53px);
+  overflow-y: auto;
   position: absolute;
   z-index: 8;
   top: 45px;
@@ -186,7 +188,7 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 .bean-soundOff { filter: grayscale(.6); }
 .bean-sleepy { animation: sleepy-breathe 3.2s var(--ease) infinite; }
 
-.app-welcome { display: grid; place-items: center; padding: 14px; background: #fff8ed; }
+.app-welcome { display: grid; place-items: center; padding: 14px; background: #fff8ed; overflow-y: auto; }
 .welcome-dialog { width: 100%; max-width: 332px; color: #26334b; text-align: center; }
 .welcome-pixel { display: block; font-size: 23px; line-height: 24px; image-rendering: pixelated; }
 .welcome-dialog h1 { margin: 5px 0 7px; font-family: "Courier New", monospace; font-size: 17px; line-height: 20px; }

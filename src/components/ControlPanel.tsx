@@ -6,6 +6,7 @@ interface ControlPanelProps {
   showContent: boolean;
   checkingAccess: boolean;
   accessMessage: string;
+  statusText: string;
   onClose: () => void;
   onPauseToggle: () => void;
   onSoundToggle: () => void;
@@ -29,6 +30,7 @@ export default function ControlPanel({
   showContent,
   checkingAccess,
   accessMessage,
+  statusText,
   onClose,
   onPauseToggle,
   onSoundToggle,
@@ -37,9 +39,9 @@ export default function ControlPanel({
 }: ControlPanelProps) {
   if (!open) return null;
 
-  const monitorLabel = unavailable ? "Needs access" : paused ? "Paused" : "Watching";
+  const monitorLabel = unavailable ? "Waiting for Claude" : paused ? "Paused" : "Watching";
   const monitorDetail = unavailable
-    ? "Bean needs Accessibility permission."
+    ? statusText
     : paused
       ? "Claude activity is temporarily paused."
       : "Bean is listening for Claude activity.";

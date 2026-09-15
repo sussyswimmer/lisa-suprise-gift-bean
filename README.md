@@ -1,6 +1,6 @@
 # Bean
 
-Bean is a draggable macOS companion for Claude Desktop. It uses your existing Claude sign-in; it has no API keys and does not read passwords or chat text.
+Bean is a draggable macOS companion for Claude Desktop. It observes the Claude app you already use; it has no separate Claude login or API keys. Prompt and reply previews stay on your Mac. Bean never reads passwords or session tokens.
 
 ## Download Bean
 
@@ -32,7 +32,11 @@ The test builds are unsigned. On first launch, macOS may require Control-clickin
 
 Bean finds the current Claude Desktop host (`com.anthropic.claudefordesktop`) and reads its local macOS Accessibility labels to determine app state. Chat, Cowork, and Code run inside that host and are distinguished from the labels Claude exposes. Bean does not collect credentials or session tokens, and it sends no Claude data anywhere.
 
-Claude Code uses its official local Hooks system. Bean installs five status-only hooks after the user selects **Connect Bean to Claude**: sent, complete, failed, stopped, and attention needed. The hooks write only status words to Bean’s local application-support folder; they never read the prompt or response. Claude Desktop Chat and Cowork remain an Accessibility-based integration and depend on the labels those apps expose on the destination Mac.
+Claude Code uses its official local Hooks system. Bean installs local hooks after you choose **Connect** and repairs them when Bean starts. With previews enabled, hooks use the provided prompt, streamed message text, and final reply fields; they do not open transcript files. The local handoff queue is cleared after Bean consumes each batch. Claude Desktop Chat and Cowork use Accessibility and depend on the interface Claude exposes on the destination Mac.
+
+Connection checks distinguish denied Accessibility, a closed Claude app, a missing Claude window, and an unreadable chat interface. Permission alone does not count as a successful Desktop connection. Bean enables Electron's documented [`AXManualAccessibility` attribute](https://www.electronjs.org/docs/latest/tutorial/accessibility#within-third-party-software) on Claude so its Chromium interface can be exposed without enabling VoiceOver.
+
+The helper's `--self-test` checks delivery of the first live Claude Code prompt and completion, and the documented final-reply field. These checks do not establish live Chat/Cowork compatibility; that still requires testing the installed app on a Mac running Claude.
 
 ## Build
 

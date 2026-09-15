@@ -4,9 +4,11 @@ interface WelcomeDialogProps {
   connectionError: string;
   onShowContentChange: (value: boolean) => void;
   onConnect: () => void;
+  onOpenClaude: () => void;
+  onOpenAccessibility: () => void;
 }
 
-export default function WelcomeDialog({ showContent, connecting, connectionError, onShowContentChange, onConnect }: WelcomeDialogProps) {
+export default function WelcomeDialog({ showContent, connecting, connectionError, onShowContentChange, onConnect, onOpenClaude, onOpenAccessibility }: WelcomeDialogProps) {
   return (
     <main className="welcome-dialog">
       <span className="welcome-pixel" aria-hidden="true">🐾</span>
@@ -18,6 +20,10 @@ export default function WelcomeDialog({ showContent, connecting, connectionError
       </label>
       <p className="welcome-detail">When enabled, snippets stay on this Mac and are shown only while Bean is open.</p>
       <button type="button" onClick={onConnect} disabled={connecting}>{connecting ? "Connecting…" : "Connect"}</button>
+      <div>
+        <button type="button" onClick={onOpenClaude}>Open Claude Desktop</button>
+        <button type="button" onClick={onOpenAccessibility}>Open Accessibility Settings</button>
+      </div>
       {connectionError && <p className="connection-error" role="alert">{connectionError}</p>}
       <small>Bean uses your existing Claude sign-in. It adds local Claude Code hooks, then needs Desktop Accessibility to observe Claude.</small>
     </main>

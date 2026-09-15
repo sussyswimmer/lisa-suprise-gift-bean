@@ -7,7 +7,7 @@ import BeanMark from "./components/BeanMark";
 import ControlPanel from "./components/ControlPanel";
 import WelcomeDialog from "./components/WelcomeDialog";
 import { BeanManifest, BeanAssetState, ClaudeEvent } from "./types";
-import { initialState, nextStateFromEvent, reducer } from "./state";
+import { connectionMessage, initialState, nextStateFromEvent, reducer } from "./state";
 import { DEFAULT_ASSET_PACK, loadManifest, normalizeStatusForAsset } from "./beanAssets";
 
 const PREFS_KEY = "bean.preferences.v1";
@@ -46,6 +46,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [checkingAccess, setCheckingAccess] = useState(false);
   const [accessMessage, setAccessMessage] = useState("");
+  const connectionRequested = useRef(false);
 
   useEffect(() => { stateRef.current = state; }, [state]);
 
@@ -95,20 +96,21 @@ export default function App() {
       if (!payload || typeof payload.timestamp !== "string") return;
 
       const next = nextStateFromEvent(payload, current);
-      dispatch({
-        type: "setBean",
-        state: next.beanState,
-        statusText: next.statusText,
-        session: payload.session,
-        preview: payload.preview,
-        source: payload.source as "chat" | "cowork" | "claude_code" | "system",
-      });
+      dispatch({ type: "claudeEvent", event: payload });
+      if (connectionRequested.current) {
+        if (payload.status !== "unavailable" && payload.source !== "system") {
+          connectionRequested.current = false;
+          setConnectionError("");
+          dispatch({ type: "setWelcomeShown" });
+        } else if (payload.status === "unavailable") {
+          setConnectionError(connectionMessage(payload));
+        }
+      }
 
-      if (next.beanState === "happy" && payload.timestamp !== lastCompletedTs.current && next.preferences.lastCompletedAt !== payload.timestamp) {
+      if (payload.status === "completed" && next.preferences.lastEventKey !== current.preferences.lastEventKey && payload.timestamp !== lastCompletedTs.current) {
         if (next.preferences.soundEnabled && !next.muted) playTone();
         lastCompletedTs.current = payload.timestamp;
       }
-      dispatch({ type: "setUnavailable", unavailable: payload.status === "unavailable" });
     }).then((remove) => { unlistenRef.current = remove; });
 
     return () => {
@@ -120,9 +122,18 @@ export default function App() {
 
   useEffect(() => {
     if (!isBeanDesktop() || !state.preferences.welcomeShown) return;
-    void invoke("start_observer", {}).catch(() => dispatch({ type: "setUnavailable", unavailable: true }));
+    void invoke("start_observer", {}).catch((error) => {
+      dispatch({ type: "setUnavailable", unavailable: true });
+      setAccessMessage(String(error));
+    });
     return () => { void invoke("stop_observer", {}); };
   }, [state.preferences.welcomeShown]);
+
+  useEffect(() => {
+    if (!isBeanDesktop() || !state.preferences.welcomeShown) return;
+    void invoke("install_claude_code_hooks", { includeContent: showContent })
+      .catch((error) => setAccessMessage(`Claude Code hooks could not be installed: ${String(error)}`));
+  }, [state.preferences.welcomeShown, showContent]);
 
   const mappedAsset = useMemo(() => {
     const source = { ...manifest.states } as BeanAssetState;
@@ -155,17 +166,24 @@ export default function App() {
     if (!isBeanDesktop()) return;
     setConnecting(true);
     setConnectionError("");
+    connectionRequested.current = true;
     try {
       try {
         await invoke("install_claude_code_hooks", { includeContent: showContent });
-      } catch {
-        // Claude Code hooks are optional; Claude Desktop Accessibility can still connect.
+      } catch (error) {
+        setAccessMessage(`Claude Code hooks could not be installed: ${String(error)}`);
       }
       const accessibilityGranted = await invoke<boolean>("request_accessibility_permission");
       if (!accessibilityGranted) {
         throw new Error("Allow Bean in System Settings → Privacy & Security → Accessibility, then choose Connect again.");
       }
       await invoke("start_observer", {});
+      const observed = await invoke<ClaudeEvent>("get_connection_status");
+      if (observed.status === "unavailable") {
+        setConnectionError(connectionMessage(observed));
+        return;
+      }
+      connectionRequested.current = false;
       dispatch({ type: "setWelcomeShown" });
     } catch (error) {
       setConnectionError(error instanceof Error ? error.message : String(error));
@@ -206,8 +224,10 @@ export default function App() {
         return;
       }
       await invoke("start_observer", {});
-      dispatch({ type: "setUnavailable", unavailable: false });
-      setAccessMessage("Accessibility is on. Bean is connected and listening.");
+      await invoke("install_claude_code_hooks", { includeContent: showContent });
+      const observed = await invoke<ClaudeEvent>("get_connection_status");
+      dispatch({ type: "claudeEvent", event: observed });
+      setAccessMessage(connectionMessage(observed));
     } catch (error) {
       dispatch({ type: "setUnavailable", unavailable: true });
       setAccessMessage(error instanceof Error ? error.message : "Bean could not verify Accessibility.");
@@ -228,7 +248,7 @@ export default function App() {
               <span>Bean</span>
             </div>
             <span className={`topbar-presence${state.unavailable ? " is-warning" : state.paused ? " is-muted" : ""}`}>
-              {state.unavailable ? "Needs access" : state.paused ? "Paused" : "Watching"}
+              {state.unavailable ? "Waiting" : state.paused ? "Paused" : "Watching"}
             </span>
             <button
               className={`settings-trigger${settingsOpen ? " is-open" : ""}`}
@@ -261,6 +281,7 @@ export default function App() {
             showContent={showContent}
             checkingAccess={checkingAccess}
             accessMessage={accessMessage}
+            statusText={state.statusText}
             onClose={() => setSettingsOpen(false)}
             onPauseToggle={() => void toggleMonitoring()}
             onSoundToggle={() => dispatch({ type: "setSound", soundEnabled: !state.preferences.soundEnabled })}
@@ -274,7 +295,9 @@ export default function App() {
           connecting={connecting}
           connectionError={connectionError}
           onShowContentChange={setShowContent}
-          onConnect={() => void connectClaude()}
+            onConnect={() => void connectClaude()}
+            onOpenClaude={() => void invoke("open_claude").catch((error) => setConnectionError(String(error)))}
+            onOpenAccessibility={() => void invoke("open_accessibility_settings").catch((error) => setConnectionError(String(error)))}
         />
       )}
     </div>

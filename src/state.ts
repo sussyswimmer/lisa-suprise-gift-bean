@@ -49,6 +49,7 @@ export const initialState: CompanionState = {
 };
 
 type Action =
+  | { type: "claudeEvent"; event: ClaudeEvent }
   | {
       type: "setBean";
       state: BeanState;
@@ -70,6 +71,8 @@ type Action =
 
 export function reducer(state: CompanionState, action: Action): CompanionState {
   switch (action.type) {
+    case "claudeEvent":
+      return nextStateFromEvent(action.event, state);
     case "setBean":
       return {
         ...state,
@@ -85,6 +88,7 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
       return {
         ...state,
         paused: action.paused,
+        preferences: { ...state.preferences, paused: action.paused },
         statusText: action.paused ? "Bean is paused" : "Observing Claude again",
       };
     case "setMuted":
@@ -140,6 +144,16 @@ export function buildDedupKey(event: ClaudeEvent): string {
   return `${event.source}|${event.session ?? "none"}|${event.status}|${event.timestamp}`;
 }
 
+export function connectionMessage(event: ClaudeEvent): string {
+  switch (event.reason) {
+    case "permission_denied": return "Allow Bean in System Settings → Privacy & Security → Accessibility.";
+    case "claude_not_running": return "Open Claude Desktop. Bean will connect when its window is readable.";
+    case "window_unavailable": return "Claude is running, but its window is unavailable. Open a Claude conversation.";
+    case "interface_unavailable": return "Claude is running, but its chat interface is not exposed to Accessibility yet.";
+    default: return event.status === "unavailable" ? "Claude monitoring is unavailable." : "Claude Desktop is readable. Bean is listening.";
+  }
+}
+
 export function nextStateFromEvent(event: ClaudeEvent, now: CompanionState): CompanionState {
   const status = event.status;
 
@@ -154,7 +168,8 @@ export function nextStateFromEvent(event: ClaudeEvent, now: CompanionState): Com
       source: event.source,
       session: event.session,
       beanState: "sleepy",
-      statusText: "Monitoring is unavailable right now",
+      statusText: connectionMessage(event),
+      preview: null,
       lastStatusTs: event.timestamp,
     };
   }
@@ -168,12 +183,12 @@ export function nextStateFromEvent(event: ClaudeEvent, now: CompanionState): Com
       beanState: "thinking",
       statusText: `${event.source === "claude_code" ? "Claude Code" : event.source === "chat" ? "Chat" : "Cowork"} is running`,
       lastStatusTs: event.timestamp,
-      preview: event.preview ?? now.preview,
+      preview: event.preview ?? (now.session === event.session && now.source === event.source ? now.preview : null),
     };
   }
 
   if (status === "reply") {
-    return { ...now, unavailable: false, source: event.source, session: event.session, beanState: "idle", statusText: "Claude replied", lastStatusTs: event.timestamp, preview: event.preview ?? null };
+    return { ...now, unavailable: false, source: event.source, session: event.session, beanState: now.beanState === "thinking" ? "thinking" : "idle", statusText: "Claude is replying", lastStatusTs: event.timestamp, preview: event.preview ?? now.preview };
   }
   if (status === "completed") {
     const eventKey = buildDedupKey(event);
@@ -192,6 +207,7 @@ export function nextStateFromEvent(event: ClaudeEvent, now: CompanionState): Com
       source: event.source,
       session: event.session,
       beanState: "happy",
+      preview: event.preview ?? now.preview,
       statusText: "Done — a completion heartbeat arrived",
       lastStatusTs: event.timestamp,
       preferences: {

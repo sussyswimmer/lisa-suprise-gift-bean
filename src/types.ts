@@ -20,6 +20,7 @@ export interface ClaudeEvent {
   status: ClaudeStatus;
   timestamp: string;
   preview?: string | null;
+  reason?: string | null;
 }
 
 export interface BeanAssetState {

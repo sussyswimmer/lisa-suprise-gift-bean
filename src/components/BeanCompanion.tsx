@@ -26,7 +26,7 @@ function bubbleFor(state: BeanState, source: string, statusText: string, session
   if (state === "message") return { title: "Claude paused", detail: statusText };
   if (state === "sleepy") return {
     title: "Bean is waiting",
-    detail: statusText.toLowerCase().includes("accessibility") ? statusText : "Open Claude Desktop to begin.",
+    detail: statusText,
   };
   return { title: session ? "Claude is ready" : "Bean is here", detail: statusText };
 }

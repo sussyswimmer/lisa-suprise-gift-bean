@@ -55,6 +55,7 @@ jobs:
         run: |
           helper="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Bean.app/Contents/MacOS/bean-claude-observer"
           test -x "$helper"
+          "$helper" --self-test
           "$helper" --request-permission | grep -q '"source":"system"'
       - name: Emit checksums
         run: |

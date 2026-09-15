@@ -16,6 +16,7 @@ struct ClaudeEvent {
     status: String,
     timestamp: String,
     preview: Option<String>,
+    reason: Option<String>,
 }
 
 #[derive(Default)]
@@ -32,8 +33,11 @@ struct BeanState {
 #[tauri::command]
 fn start_observer(state: State<'_, BeanState>, app: AppHandle) -> Result<String, String> {
     let mut running = state.observer.child.lock().map_err(|e| format!("observer lock failed: {e}"))?;
-    if running.is_some() {
-        return Ok("already_running".into());
+    if let Some(child) = running.as_mut() {
+        if child.try_wait().map_err(|e| format!("could not check observer: {e}"))?.is_none() {
+            return Ok("already_running".into());
+        }
+        *running = None;
     }
 
     let sidecar = resolve_sidecar_path(&app)?;
@@ -109,7 +113,7 @@ fn install_claude_code_hooks(app: AppHandle, include_content: bool) -> Result<St
     fs::create_dir_all(&claude_dir).map_err(|e| format!("could not create Claude Code settings directory: {e}"))?;
 
     let hook_path = claude_dir.join("bean-claude-code-hook.sh");
-    let hook_script = format!("#!/bin/sh\nset -eu\npgrep -x Bean >/dev/null 2>&1 || exit 0\nexec {quoted_sidecar} --claude-code-hook \"$1\" {}\n", if include_content { "content" } else { "status" });
+    let hook_script = format!("#!/bin/sh\nset -eu\n(pgrep -x bean >/dev/null 2>&1 || pgrep -x Bean >/dev/null 2>&1) || exit 0\nexec {quoted_sidecar} --claude-code-hook \"$1\" {}\n", if include_content { "content" } else { "status" });
     fs::write(&hook_path, hook_script).map_err(|e| format!("could not write Bean's local Claude Code hook: {e}"))?;
 
     #[cfg(unix)]
@@ -156,6 +160,38 @@ fn install_claude_code_hooks(app: AppHandle, include_content: bool) -> Result<St
 #[tauri::command]
 fn get_asset_pack_path(state: State<'_, BeanState>) -> Option<String> {
     state.asset_pack_path.lock().ok().and_then(|s| s.clone())
+}
+
+#[tauri::command]
+fn get_connection_status(app: AppHandle) -> Result<ClaudeEvent, String> {
+    let output = Command::new(resolve_sidecar_path(&app)?)
+        .arg("--connection-status")
+        .output()
+        .map_err(|e| format!("could not inspect Claude: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("Claude helper exited with {}", output.status));
+    }
+    // There can be several installed Claude hosts; prefer a readable one.
+    let events: Vec<ClaudeEvent> = String::from_utf8_lossy(&output.stdout)
+        .lines().filter_map(|line| serde_json::from_str(line).ok()).collect();
+    events.iter().find(|event| event.status != "unavailable")
+        .or_else(|| events.first()).cloned()
+        .ok_or_else(|| "Claude helper did not return connection status".into())
+}
+
+#[tauri::command]
+fn open_claude() -> Result<(), String> {
+    Command::new("/usr/bin/open").args(["-b", "com.anthropic.claudefordesktop"])
+        .status().map_err(|e| format!("could not open Claude Desktop: {e}"))?
+        .success().then_some(()).ok_or_else(|| "Claude Desktop is not installed".into())
+}
+
+#[tauri::command]
+fn open_accessibility_settings() -> Result<(), String> {
+    Command::new("/usr/bin/open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        .status().map_err(|e| format!("could not open Accessibility settings: {e}"))?
+        .success().then_some(()).ok_or_else(|| "could not open Accessibility settings".into())
 }
 
 #[tauri::command]
@@ -216,6 +252,9 @@ fn main() {
             get_asset_pack_path,
             request_accessibility_permission,
             install_claude_code_hooks,
+            get_connection_status,
+            open_claude,
+            open_accessibility_settings,
             drag_window,
             set_window_mode,
             quit_app
