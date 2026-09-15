@@ -90,13 +90,19 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
     case "setMuted":
       return { ...state, muted: action.muted };
     case "setUnavailable":
+      if (!action.unavailable) {
+        return {
+          ...state,
+          unavailable: false,
+          beanState: state.unavailable ? "idle" : state.beanState,
+          statusText: state.unavailable ? "Waiting and watching" : state.statusText,
+        };
+      }
       return {
         ...state,
-        unavailable: action.unavailable,
-        beanState: action.unavailable ? "sleepy" : state.beanState,
-        statusText: action.unavailable
-          ? "Accessibility not available yet — waiting for permission"
-          : state.statusText,
+        unavailable: true,
+        beanState: "sleepy",
+        statusText: "Accessibility not available yet — waiting for permission",
       };
     case "setCurrentNote":
       return { ...state, preferences: { ...state.preferences, currentNote: action.value } };

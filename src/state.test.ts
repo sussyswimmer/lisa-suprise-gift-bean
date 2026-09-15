@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { nextStateFromEvent, initialState } from "./state";
+import { nextStateFromEvent, initialState, reducer } from "./state";
 
 describe("Bean state reducer", () => {
   it("keeps blocked status on unavailable event", () => {
@@ -17,6 +17,14 @@ describe("Bean state reducer", () => {
       initialState,
     );
     expect(withEvent.beanState).toBe("thinking");
+  });
+
+  it("clears a previous permission warning when monitoring resumes", () => {
+    const blocked = reducer(initialState, { type: "setUnavailable", unavailable: true });
+    const resumed = reducer(blocked, { type: "setUnavailable", unavailable: false });
+    expect(resumed.unavailable).toBe(false);
+    expect(resumed.beanState).toBe("idle");
+    expect(resumed.statusText).toBe("Waiting and watching");
   });
 
   it("carries Claude Desktop text into the visible companion state", () => {

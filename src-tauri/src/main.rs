@@ -21,6 +21,7 @@ struct ClaudeEvent {
 #[derive(Default)]
 struct ObserverState {
     child: Mutex<Option<Child>>,
+    last_event: Mutex<Option<ClaudeEvent>>,
 }
 
 #[derive(Default)]
@@ -47,10 +48,14 @@ fn start_observer(state: State<'_, BeanState>, app: AppHandle) -> Result<String,
     let stdout = child.stdout.take().ok_or_else(|| "observer helper did not provide stdout".to_string())?;
 
     let emit_target = app.clone();
+    let observer = state.observer.clone();
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines().flatten() {
             if !line.trim().is_empty() {
                 if let Ok(event) = serde_json::from_str::<ClaudeEvent>(&line) {
+                    if let Ok(mut last_event) = observer.last_event.lock() {
+                        *last_event = Some(event.clone());
+                    }
                     let _ = emit_target.emit("bean-claude-event", event);
                 }
             }
@@ -59,6 +64,11 @@ fn start_observer(state: State<'_, BeanState>, app: AppHandle) -> Result<String,
 
     *running = Some(child);
     Ok("started".into())
+}
+
+#[tauri::command]
+fn get_observer_status(state: State<'_, BeanState>) -> Option<ClaudeEvent> {
+    state.observer.last_event.lock().ok().and_then(|event| event.clone())
 }
 
 #[tauri::command]
@@ -212,6 +222,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             start_observer,
             stop_observer,
+            get_observer_status,
             set_asset_pack_path,
             get_asset_pack_path,
             request_accessibility_permission,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
@@ -85,30 +85,33 @@ export default function App() {
     }));
   }, [state.preferences]);
 
+  const applyObserverEvent = useCallback((payload: ClaudeEvent) => {
+    const current = stateRef.current;
+    if (!payload || typeof payload.timestamp !== "string") return;
+
+    const next = nextStateFromEvent(payload, current);
+    dispatch({
+      type: "setBean",
+      state: next.beanState,
+      statusText: next.statusText,
+      session: payload.session,
+      preview: payload.preview,
+      source: payload.source as "chat" | "cowork" | "claude_code" | "system",
+    });
+
+    if (next.beanState === "happy" && payload.timestamp !== lastCompletedTs.current && next.preferences.lastCompletedAt !== payload.timestamp) {
+      if (next.preferences.soundEnabled && !next.muted) playTone();
+      lastCompletedTs.current = payload.timestamp;
+    }
+    dispatch({ type: "setUnavailable", unavailable: payload.status === "unavailable" });
+  }, []);
+
   useEffect(() => {
     if (!isBeanDesktop()) return;
     let active = true;
     void listen<ClaudeEvent>("bean-claude-event", (event) => {
       if (!active) return;
-      const payload = event.payload;
-      const current = stateRef.current;
-      if (!payload || typeof payload.timestamp !== "string") return;
-
-      const next = nextStateFromEvent(payload, current);
-      dispatch({
-        type: "setBean",
-        state: next.beanState,
-        statusText: next.statusText,
-        session: payload.session,
-        preview: payload.preview,
-        source: payload.source as "chat" | "cowork" | "claude_code" | "system",
-      });
-
-      if (next.beanState === "happy" && payload.timestamp !== lastCompletedTs.current && next.preferences.lastCompletedAt !== payload.timestamp) {
-        if (next.preferences.soundEnabled && !next.muted) playTone();
-        lastCompletedTs.current = payload.timestamp;
-      }
-      dispatch({ type: "setUnavailable", unavailable: payload.status === "unavailable" });
+      applyObserverEvent(event.payload);
     }).then((remove) => { unlistenRef.current = remove; });
 
     return () => {
@@ -116,7 +119,27 @@ export default function App() {
       unlistenRef.current?.();
       unlistenRef.current = null;
     };
-  }, []);
+  }, [applyObserverEvent]);
+
+  useEffect(() => {
+    if (!isBeanDesktop() || !state.preferences.welcomeShown) return;
+    let active = true;
+    const syncLatestObserverStatus = async () => {
+      try {
+        const latest = await invoke<ClaudeEvent | null>("get_observer_status");
+        if (active && latest) applyObserverEvent(latest);
+      } catch {
+        // Native events are the primary path. This covers the short startup
+        // window where the observer emitted before React subscribed.
+      }
+    };
+    void syncLatestObserverStatus();
+    const intervalId = window.setInterval(() => { void syncLatestObserverStatus(); }, 1_500);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [applyObserverEvent, state.preferences.welcomeShown]);
 
   useEffect(() => {
     if (!isBeanDesktop() || !state.preferences.welcomeShown) return;
