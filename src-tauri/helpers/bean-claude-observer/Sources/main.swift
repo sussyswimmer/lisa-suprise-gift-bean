@@ -308,7 +308,14 @@ func pollAccessibility(for bundleID: String) -> Bool {
   let source = sourceFor(labels: labels)
   let observedStatus = directStatus(from: labels)
   let typing = observedStatus == "idle" && composerIsActive(in: appElement, trackerKey: trackerKey)
-  let status = typing ? "message" : transitionStatus(observedStatus, trackerKey: trackerKey)
+  let isActiveClaudeWindow = NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
+  // Newer Claude Desktop builds hide the composer behind an Electron surface
+  // that is not consistently exposed as AXTextArea. Falling back to the
+  // active Claude window keeps Bean responsive while the user is in chat,
+  // while explicit generation/error controls above still take precedence.
+  let status = observedStatus == "idle" && (typing || isActiveClaudeWindow)
+    ? "message"
+    : transitionStatus(observedStatus, trackerKey: trackerKey)
   // A full second walk solely to extract message text made the companion lag
   // behind Claude's UI (and is unnecessary for activity awareness). Keep the
   // status-only event fast and deliberately do not copy chat content.
