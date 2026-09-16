@@ -74,7 +74,7 @@ func primaryWindow(_ appElement: AXUIElement) -> AXUIElement? {
   return nil
 }
 
-func visibleLabels(in root: AXUIElement, maxNodes: Int = 700) -> [String] {
+func visibleLabels(in root: AXUIElement, maxNodes: Int = 180) -> [String] {
   let attributes: [CFString] = [
     kAXRoleAttribute as CFString,
     kAXSubroleAttribute as CFString,
@@ -309,7 +309,10 @@ func pollAccessibility(for bundleID: String) -> Bool {
   let observedStatus = directStatus(from: labels)
   let typing = observedStatus == "idle" && composerIsActive(in: appElement, trackerKey: trackerKey)
   let status = typing ? "message" : transitionStatus(observedStatus, trackerKey: trackerKey)
-  emit(source, sessionFrom(title: title), status, conversationPreview(in: window))
+  // A full second walk solely to extract message text made the companion lag
+  // behind Claude's UI (and is unnecessary for activity awareness). Keep the
+  // status-only event fast and deliberately do not copy chat content.
+  emit(source, sessionFrom(title: title), status)
   return true
 }
 
@@ -364,6 +367,11 @@ while true {
     Thread.sleep(forTimeInterval: 1.2)
     continue
   }
+
+  // Publish the healthy permission state before reading Claude's potentially
+  // large accessibility tree. A slow or temporarily unresponsive Claude
+  // window must never strand Bean on the misleading “Needs access” screen.
+  emit("system", nil, "idle")
 
   var observedApp = false
   for bundleID in supportedApps {

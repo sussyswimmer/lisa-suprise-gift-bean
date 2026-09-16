@@ -17,7 +17,13 @@ const DEFAULT_MANUAL_NOTE = "Official Bean report: you are very loved.";
 // enabled. The module API works without that global, so detect its internal
 // bridge instead and keep the production bundle connected to Rust.
 function isBeanDesktop() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (typeof window === "undefined") return false;
+
+  // Tauri's internal object is injected asynchronously in some packaged
+  // builds.  The app is already running at a tauri: URL, though, so relying
+  // only on that object can prevent the first native status sync and leave
+  // Bean showing an old permission warning forever.
+  return window.location.protocol === "tauri:" || "__TAURI_INTERNALS__" in window;
 }
 
 function playTone() {
@@ -152,8 +158,14 @@ export default function App() {
 
   useEffect(() => {
     if (!isBeanDesktop() || !state.preferences.welcomeShown) return;
-    void invoke("start_observer", {}).catch(() => dispatch({ type: "setUnavailable", unavailable: true }));
-    return () => { void invoke("stop_observer", {}); };
+    // A launch race (for example while macOS is finishing an app update) is
+    // not evidence that Accessibility was denied. The native setup retries
+    // the observer; leave Bean in its normal waiting state instead of showing
+    // a false permission warning.
+    void invoke("start_observer", {}).catch(() => undefined);
+    // The Rust process owns the sidecar for its full lifetime. Stopping it
+    // during React effect cleanup creates a start/stop race during a restored
+    // window or development-style remount, leaving Bean alive but blind.
   }, [state.preferences.welcomeShown]);
 
   const mappedAsset = useMemo(() => {

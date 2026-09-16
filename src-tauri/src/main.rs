@@ -254,7 +254,9 @@ fn main() {
             // React effects have registered.
             let app_handle = app.handle().clone();
             let state = app.state::<BeanState>();
-            let _ = start_observer(state, app_handle);
+            if let Err(error) = start_observer(state, app_handle) {
+                eprintln!("Bean could not start its observer: {error}");
+            }
 
             if let Some(main_window) = app.get_webview_window("main") {
                 let _ = main_window.set_always_on_top(true);
