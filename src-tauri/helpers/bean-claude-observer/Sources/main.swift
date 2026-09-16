@@ -28,6 +28,7 @@ let supportedApps = [
 var trackers = [String: SessionTracker]()
 var claudeCodeEventOffset: UInt64?
 var claudeCodeHooksAvailable = false
+var hasPublishedHealthyHeartbeat = false
 
 func now() -> String {
   ISO8601DateFormatter().string(from: Date())
@@ -307,13 +308,11 @@ func pollAccessibility(for bundleID: String) -> Bool {
   }
   let source = sourceFor(labels: labels)
   let observedStatus = directStatus(from: labels)
-  let typing = observedStatus == "idle" && composerIsActive(in: appElement, trackerKey: trackerKey)
-  let isActiveClaudeWindow = NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
   // Newer Claude Desktop builds hide the composer behind an Electron surface
-  // that is not consistently exposed as AXTextArea. Falling back to the
-  // active Claude window keeps Bean responsive while the user is in chat,
-  // while explicit generation/error controls above still take precedence.
-  let status = observedStatus == "idle" && (typing || isActiveClaudeWindow)
+  // that is not consistently exposed as AXTextArea or marked frontmost while
+  // a floating companion is visible. Treat its open chat as active, while
+  // explicit generation/error controls above still take precedence.
+  let status = observedStatus == "idle"
     ? "message"
     : transitionStatus(observedStatus, trackerKey: trackerKey)
   // A full second walk solely to extract message text made the companion lag
@@ -378,7 +377,10 @@ while true {
   // Publish the healthy permission state before reading Claude's potentially
   // large accessibility tree. A slow or temporarily unresponsive Claude
   // window must never strand Bean on the misleading “Needs access” screen.
-  emit("system", nil, "idle")
+  if !hasPublishedHealthyHeartbeat {
+    emit("system", nil, "idle")
+    hasPublishedHealthyHeartbeat = true
+  }
 
   var observedApp = false
   for bundleID in supportedApps {
