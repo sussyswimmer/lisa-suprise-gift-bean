@@ -210,8 +210,12 @@ export function connectionMessage(event: ClaudeEvent): string {
       return "Open Claude Desktop. Bean will connect when its window is readable.";
     case "window_unavailable":
       return "Claude is running, but its window is unavailable. Open a Claude conversation.";
+    case "interface_scanning":
+      return "Claude’s interface is taking longer to read. Bean is retrying; bring the conversation window forward.";
+    case "interface_unresponsive":
+      return "Claude is not responding to Accessibility yet. Bean is retrying.";
     case "interface_unavailable":
-      return "Claude is running, but its chat interface is not exposed to Accessibility yet.";
+      return "Open a conversation in Claude’s main window, then refresh Bean’s connection. If it still cannot read the interface, quit and reopen Claude.";
     default:
       return event.status === "unavailable"
         ? "Claude monitoring is unavailable."

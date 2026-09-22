@@ -22,7 +22,7 @@ describe("Bean state reducer", () => {
     ).toContain("Allow Bean");
     expect(
       connectionMessage({ ...event, reason: "interface_unavailable" }),
-    ).toContain("not exposed");
+    ).toContain("Open a conversation");
   });
 
   it("applies complete events without discarding deduplication or session metadata", () => {

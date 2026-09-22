@@ -67,54 +67,74 @@ func stringValue(_ element: AXUIElement, _ attribute: CFString) -> String? {
   return value as? String
 }
 
-func primaryWindow(_ appElement: AXUIElement) -> AXUIElement? {
-  var focusedWindow: CFTypeRef?
-  if AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success,
-     let focusedWindow {
-    return (focusedWindow as! AXUIElement)
+func candidateWindows(_ appElement: AXUIElement) -> [AXUIElement] {
+  var result = [AXUIElement]()
+  for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
+    var value: CFTypeRef?
+    if AXUIElementCopyAttributeValue(appElement, attribute as CFString, &value) == .success,
+       let value, CFGetTypeID(value) == AXUIElementGetTypeID() {
+      let window = value as! AXUIElement
+      if !result.contains(where: { CFEqual($0, window) }) { result.append(window) }
+    }
   }
-
-  var windowsValue: CFTypeRef?
-  if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsValue) == .success,
-     let windows = windowsValue as? [AXUIElement] {
-    return windows.first
+  var value: CFTypeRef?
+  if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &value) == .success,
+     let windows = value as? [AXUIElement] {
+    for window in windows where !result.contains(where: { CFEqual($0, window) }) { result.append(window) }
   }
-  return nil
+  return result
 }
 
-func visibleLabels(in root: AXUIElement, maxNodes: Int = 180) -> [String] {
-  let attributes: [CFString] = [
-    kAXRoleAttribute as CFString,
-    kAXSubroleAttribute as CFString,
-    kAXTitleAttribute as CFString,
-    kAXDescriptionAttribute as CFString,
-    kAXValueAttribute as CFString,
-    "AXIdentifier" as CFString,
-  ]
+struct InterfaceSnapshot {
   var labels = [String]()
+  var readable = false
+  var incomplete = false
+}
+
+// The web surface can be deeper than a large sidebar or a separate utility
+// window. Traverse roles first and avoid copying message/composer values.
+func scanTree<Node>(root: Node, maxNodes: Int = 2_000,
+                    children: (Node) -> [Node], inspect: (Node) -> (String, [String]),
+                    shouldContinue: () -> Bool = { true }) -> InterfaceSnapshot {
+  var snapshot = InterfaceSnapshot()
   var queue = [root]
   var index = 0
-
-  while index < queue.count && index < maxNodes {
-    let element = queue[index]
+  var hasComposer = false
+  while index < queue.count && index < maxNodes && shouldContinue() {
+    let node = queue[index]
     index += 1
-
-    let role = stringValue(element, kAXRoleAttribute as CFString) ?? ""
-    let isContent = [kAXStaticTextRole as String, kAXTextAreaRole as String, kAXTextFieldRole as String].contains(role)
-    for attribute in attributes where !isContent || attribute == kAXRoleAttribute as CFString {
-      if let value = stringValue(element, attribute)?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
-        labels.append(value.lowercased())
-      }
-    }
-
-    var childrenValue: CFTypeRef?
-    if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenValue) == .success,
-       let children = childrenValue as? [AXUIElement] {
-      queue.append(contentsOf: children)
+    let (role, labels) = inspect(node)
+    hasComposer = hasComposer || role == "AXTextArea" || role == "AXTextField"
+    snapshot.readable = snapshot.readable || role == "AXWebArea"
+    snapshot.labels.append(contentsOf: labels)
+    // Text nodes are leaves for status monitoring, even if they expose spans.
+    if !["AXStaticText", "AXTextArea", "AXTextField"].contains(role) {
+      queue.append(contentsOf: children(node))
     }
   }
+  let hasSendControl = snapshot.labels.contains { ["send", "send message", "send prompt"].contains($0) }
+  snapshot.readable = snapshot.readable || (hasComposer && hasSendControl)
+  snapshot.incomplete = index < queue.count
+  return snapshot
+}
 
-  return Array(Set(labels))
+func visibleInterface(in root: AXUIElement) -> InterfaceSnapshot {
+  let deadline = Date().addingTimeInterval(1.5)
+  return scanTree(root: root, children: { element in
+    for attribute in [kAXChildrenAttribute as CFString, "AXContents" as CFString] {
+      var value: CFTypeRef?
+      if AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+         let children = value as? [AXUIElement], !children.isEmpty { return children }
+    }
+    return []
+  }, inspect: { element in
+    let role = stringValue(element, kAXRoleAttribute as CFString) ?? ""
+    let controls = ["AXButton", "AXCheckBox", "AXRadioButton", "AXMenuItem", "AXTab", "AXProgressIndicator"]
+    guard controls.contains(role) else { return (role, []) }
+    let attributes = [kAXTitleAttribute as CFString, kAXDescriptionAttribute as CFString, "AXIdentifier" as CFString]
+    let labels = attributes.compactMap { stringValue(element, $0)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+    return (role, labels.filter { !$0.isEmpty })
+  }, shouldContinue: { Date() < deadline })
 }
 
 func sourceFor(labels: [String]) -> String {
@@ -270,23 +290,34 @@ func pollAccessibility(for bundleID: String) -> Bool {
 
   let trackerKey = bundleID
   let appElement = AXUIElementCreateApplication(app.processIdentifier)
-  // Electron does not always expose Chromium's content tree until assistive
-  // software explicitly enables it. This only changes Claude's AX support.
-  _ = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-  guard let window = primaryWindow(appElement) else {
+  AXUIElementSetMessagingTimeout(appElement, 0.3)
+  // Enable the documented Electron accessibility mode before inspecting windows.
+  let activation = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+  let windows = candidateWindows(appElement)
+  guard !windows.isEmpty else {
     resetTracker(trackerKey)
     emit(bundleID == "com.anthropic.claude-cowork" ? "cowork" : "chat", nil, "unavailable", reason: "window_unavailable")
     return true
   }
-
-  let title = stringValue(window, kAXTitleAttribute as CFString)
-  let labels = visibleLabels(in: window)
-
-  guard labels.contains("axwebarea") else {
+  var readableWindow: AXUIElement?
+  var labels = [String]()
+  var incomplete = false
+  for window in windows.prefix(6) {
+    let snapshot = visibleInterface(in: window)
+    incomplete = incomplete || snapshot.incomplete
+    if snapshot.readable {
+      readableWindow = window
+      labels = snapshot.labels
+      break
+    }
+  }
+  guard let window = readableWindow else {
     resetTracker(trackerKey)
-    emit("chat", sessionFrom(title: title), "unavailable", reason: "interface_unavailable")
+    let reason = incomplete ? "interface_scanning" : activation == .cannotComplete ? "interface_unresponsive" : "interface_unavailable"
+    emit("chat", nil, "unavailable", reason: reason)
     return true
   }
+  let title = stringValue(window, kAXTitleAttribute as CFString)
   let source = sourceFor(labels: labels)
   let observedStatus = directStatus(from: labels)
   let transitioned = transitionStatus(observedStatus, trackerKey: trackerKey)
@@ -331,6 +362,14 @@ if args.contains("--self-test") {
   try FileManager.default.createDirectory(at: testDir, withIntermediateDirectories: true)
   defer { try? FileManager.default.removeItem(at: testDir) }
   claudeCodeEventsURL = testDir.appendingPathComponent("events")
+  let deep = scanTree(root: 0, children: { $0 < 300 ? [$0 + 1] : [] }, inspect: { ($0 == 300 ? "AXWebArea" : "AXGroup", []) })
+  precondition(deep.readable, "Web surfaces beyond the old 180-node limit must be found")
+  let nativeComposer = scanTree(root: 0, children: { $0 == 0 ? [1, 2] : [] }, inspect: { $0 == 1 ? ("AXTextArea", []) : $0 == 2 ? ("AXButton", ["send message"]) : ("AXGroup", []) })
+  precondition(nativeComposer.readable, "A usable composer and send button must work without an AXWebArea wrapper")
+  let bounded = scanTree(root: 0, maxNodes: 180, children: { [$0 + 1] }, inspect: { _ in ("AXGroup", []) })
+  precondition(bounded.incomplete && !bounded.readable, "A truncated tree must not be reported as definitively unreadable")
+  let content = scanTree(root: 0, children: { _ in [1] }, inspect: { _ in ("AXTextArea", []) })
+  precondition(!content.incomplete && !content.readable, "Text content must not be traversed for status detection")
   precondition(transitionStatus("working", trackerKey: "test") == "working")
   precondition(transitionStatus("idle", trackerKey: "test") == "working")
   precondition(transitionStatus("idle", trackerKey: "test") == "completed")
