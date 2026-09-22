@@ -1,0 +1,146 @@
+// @vitest-environment jsdom
+import { StrictMode } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import App from "./App";
+import { initialState } from "./state";
+
+const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: native.invoke,
+  convertFileSrc: (path: string) => path,
+}));
+vi.mock("@tauri-apps/api/event", () => ({ listen: native.listen }));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  localStorage.clear();
+  Object.defineProperty(window, "__TAURI_INTERNALS__", {
+    configurable: true,
+    value: {},
+  });
+  native.invoke.mockResolvedValue(null);
+  native.listen.mockResolvedValue(vi.fn());
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+});
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+function restore(prefs = {}) {
+  localStorage.setItem(
+    "bean.preferences.v1",
+    JSON.stringify({
+      preferences: {
+        ...initialState.preferences,
+        welcomeShown: true,
+        ...prefs,
+      },
+    }),
+  );
+}
+function event(status: string, preview?: string) {
+  act(() => {
+    window.dispatchEvent(
+      new CustomEvent("bean-observer-status", {
+        detail: {
+          source: "claude_code",
+          session: "s1",
+          timestamp: "2026-09-22T00:00:00Z",
+          status,
+          preview,
+        },
+      }),
+    );
+  });
+}
+
+describe("native event integration", () => {
+  it("restores pause before starting monitoring and ignores incoming work", async () => {
+    restore({ paused: true });
+    render(<App />);
+    await waitFor(() =>
+      expect(native.invoke).toHaveBeenCalledWith("stop_observer"),
+    );
+    expect(
+      native.invoke.mock.calls.some(
+        ([command]) => command === "start_observer",
+      ),
+    ).toBe(false);
+    event("working");
+    expect(screen.queryByText("Claude Code is working")).toBeNull();
+  });
+  it("updates hook privacy and hides previews when the setting changes", async () => {
+    restore({ showContent: true });
+    render(<App />);
+    event("working", "private preview");
+    expect(screen.getByText("private preview")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open Bean settings" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Show Claude Code previews" }),
+    );
+    expect(screen.queryByText("private preview")).toBeNull();
+    await waitFor(() =>
+      expect(native.invoke).toHaveBeenCalledWith("install_claude_code_hooks", {
+        includeContent: false,
+      }),
+    );
+  });
+  it("chimes once when the same completion arrives over multiple transports", () => {
+    restore({ soundEnabled: true });
+    const start = vi.fn();
+    const close = vi.fn().mockResolvedValue(undefined);
+    const oscillator = {
+      type: "",
+      frequency: { value: 0 },
+      connect: vi.fn(() => ({ connect: vi.fn() })),
+      start,
+      stop: vi.fn(),
+      onended: null as null | (() => void),
+    };
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        currentTime = 0;
+        destination = {};
+        createOscillator = () => oscillator;
+        createGain = () => ({ gain: { value: 0 } });
+        close = close;
+      },
+    );
+    render(<App />);
+    event("completed");
+    event("completed");
+    expect(start).toHaveBeenCalledTimes(1);
+    oscillator.onended?.();
+    expect(close).toHaveBeenCalledOnce();
+  });
+  it("unsubscribes listeners whose registration finishes after StrictMode cleanup", async () => {
+    const registrations: ((remove: () => void) => void)[] = [];
+    native.listen.mockImplementation(
+      () => new Promise<() => void>((resolve) => registrations.push(resolve)),
+    );
+    const view = render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    const removers = registrations.map(() => vi.fn());
+    await act(async () => {
+      registrations.forEach((resolve, i) => resolve(removers[i]));
+    });
+    expect(removers[0]).toHaveBeenCalledOnce();
+    view.unmount();
+    expect(removers.every((remove) => remove.mock.calls.length === 1)).toBe(
+      true,
+    );
+  });
+});

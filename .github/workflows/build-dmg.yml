@@ -27,23 +27,14 @@ jobs:
           node-version: 24
       - name: Install dependencies
         run: npm ci
-      - name: Build frontend bundle
-        run: npm run build
+      - name: Check frontend
+        run: npm run check
       - name: Build Accessibility helper
-        shell: bash
         run: |
-          case "${{ matrix.target }}" in
-            aarch64-apple-darwin) swift_target="arm64-apple-macosx14.0" ;;
-            x86_64-apple-darwin) swift_target="x86_64-apple-macosx14.0" ;;
-          esac
-          swiftc -O \
-            -target "$swift_target" \
-            -framework ApplicationServices \
-            -framework Foundation \
-            -framework AppKit \
-            src-tauri/helpers/bean-claude-observer/Sources/main.swift \
-            -o "src-tauri/helpers/bean-claude-observer-${{ matrix.target }}"
-          chmod +x "src-tauri/helpers/bean-claude-observer-${{ matrix.target }}"
+          npm run build:helper
+          npm run build:helper -- ${{ matrix.target }}
+      - name: Test Rust
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Build signed-disabled DMG
         uses: tauri-apps/tauri-action@v0
         with:
@@ -55,7 +46,7 @@ jobs:
         run: |
           helper="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Bean.app/Contents/MacOS/bean-claude-observer"
           test -x "$helper"
-          "$helper" --request-permission | grep -q '"source":"system"'
+          "$helper" --self-test
       - name: Emit checksums
         run: |
           shasum -a 256 src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg > \

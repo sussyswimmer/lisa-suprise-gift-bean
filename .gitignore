@@ -7,3 +7,7 @@ src-tauri/target
 /.vscode
 /.DS_Store
 /.AppleDouble
+
+src-tauri/gen/
+src-tauri/helpers/bean-claude-observer-*-apple-darwin
+src-tauri/helpers/bean-claude-observer/.build/

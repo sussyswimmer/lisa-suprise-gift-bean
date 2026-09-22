@@ -1,26 +1,11 @@
 # Accessibility observer sidecar
 
-Build command (macOS):
+From the repository root on macOS, run `npm run build:helper`. This compiles the Swift source to the target-suffixed executable required by Tauri. `tauri dev` and `tauri build` also run this step automatically.
 
-```bash
-cd src-tauri/helpers/bean-claude-observer
-swift build -c release
-```
+For Intel packaging, use `npm run build:helper -- x86_64-apple-darwin`. Both targets require macOS 14 or later.
 
-Expected output executable:
+Run `src-tauri/helpers/bean-claude-observer-aarch64-apple-darwin --self-test` on Apple Silicon to test queue delivery, completion transitions, and preview privacy without modifying Claude settings or requesting Accessibility access. Substitute the Intel suffix when needed.
 
-- `.build/release/bean-claude-observer`
+`--simulate` emits synthetic working/completed events. `--connection-status` inspects the currently exposed Claude interface without requesting permission. `--request-permission` is the explicit permission prompt used after Connect.
 
-On installation, this binary is expected to be available to Tauri as `helpers/bean-claude-observer`.
-
-If Accessibility is blocked, the helper emits:
-
-```json
-{"source":"system","status":"unavailable","timestamp":"..."}
-```
-
-To force synthetic events while validating install wiring:
-
-```bash
-./.build/release/bean-claude-observer --simulate
-```
+Desktop monitoring emits status only. Code hooks retain session identity in status-only mode; optional previews are limited to 240 characters and consumed through a locked local queue.
