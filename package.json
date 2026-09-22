@@ -2,7 +2,7 @@
   "name": "bean",
   "private": true,
   "version": "0.1.0",
-  "description": "Bean — floating Claude companion for macOS",
+  "description": "Bean \u2014 floating Claude companion for macOS",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,9 +11,13 @@
     "lint": "eslint src --ext .ts,.tsx",
     "typecheck": "tsc -p .",
     "test": "vitest run",
-    "test:unit": "vitest run src/**/*.test.ts",
+    "test:unit": "vitest run",
     "tauri": "tauri",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx}\"",
+    "build:helper": "node scripts/build-helper.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.4",
@@ -22,16 +26,25 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@tauri-apps/cli": "^2.11.4",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^20.14.6",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.3",
     "@typescript-eslint/parser": "^8.70.0",
-    "@vitejs/plugin-react": "^4.3.1",
+    "@vitejs/plugin-react": "^5.2.0",
     "eslint": "^9.9.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^16.5.0",
+    "jsdom": "^29.1.1",
     "prettier": "^3.3.3",
     "typescript": "^5.5.4",
-    "vite": "^5.4.2",
-    "vitest": "^2.0.5"
+    "typescript-eslint": "^8.70.1",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

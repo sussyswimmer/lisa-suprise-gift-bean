@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { BeanAssetState, BeanManifest } from "./types";
 
 export const DEFAULT_ASSET_PACK = {
@@ -19,8 +20,22 @@ export async function loadManifest(): Promise<BeanManifest> {
     if (!resp.ok) {
       return DEFAULT_ASSET_PACK;
     }
-    const data = (await resp.json()) as BeanManifest;
-    return data?.states ? data : DEFAULT_ASSET_PACK;
+    const asset = z.string().min(1);
+    const parsed = z
+      .object({
+        version: z.string(),
+        states: z.object({
+          idle: asset,
+          noticed: asset,
+          thinking: asset,
+          message: asset,
+          happy: asset,
+          sleepy: asset,
+          soundOff: asset,
+        }),
+      })
+      .safeParse(await resp.json());
+    return parsed.success ? parsed.data : DEFAULT_ASSET_PACK;
   } catch {
     return DEFAULT_ASSET_PACK;
   }

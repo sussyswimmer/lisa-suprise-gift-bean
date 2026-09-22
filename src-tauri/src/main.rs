@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -16,11 +17,13 @@ struct ClaudeEvent {
     status: String,
     timestamp: String,
     preview: Option<String>,
+    reason: Option<String>,
 }
 
 #[derive(Default)]
 struct ObserverState {
     child: Mutex<Option<Child>>,
+    generation: AtomicU64,
     last_event: Mutex<Option<ClaudeEvent>>,
 }
 
@@ -28,6 +31,7 @@ struct ObserverState {
 struct BeanState {
     observer: Arc<ObserverState>,
     asset_pack_path: Mutex<Option<String>>,
+    hook_install: Mutex<()>,
 }
 
 fn publish_observer_event(app: &AppHandle, event: &ClaudeEvent) {
@@ -37,8 +41,12 @@ fn publish_observer_event(app: &AppHandle, event: &ClaudeEvent) {
     // WebKit can finish restoring the React application after the first native
     // event was emitted. Dispatch a DOM event as a second, direct delivery path
     // so the visible companion always catches the current observer state.
-    let Ok(event_json) = serde_json::to_string(event) else { return };
-    let Ok(event_literal) = serde_json::to_string(&event_json) else { return };
+    let Ok(event_json) = serde_json::to_string(event) else {
+        return;
+    };
+    let Ok(event_literal) = serde_json::to_string(&event_json) else {
+        return;
+    };
     let script = format!(
         "window.dispatchEvent(new CustomEvent('bean-observer-status', {{ detail: JSON.parse({event_literal}) }}));"
     );
@@ -49,9 +57,20 @@ fn publish_observer_event(app: &AppHandle, event: &ClaudeEvent) {
 
 #[tauri::command]
 fn start_observer(state: State<'_, BeanState>, app: AppHandle) -> Result<String, String> {
-    let mut running = state.observer.child.lock().map_err(|e| format!("observer lock failed: {e}"))?;
-    if running.is_some() {
-        return Ok("already_running".into());
+    let mut running = state
+        .observer
+        .child
+        .lock()
+        .map_err(|e| format!("observer lock failed: {e}"))?;
+    if let Some(child) = running.as_mut() {
+        if child
+            .try_wait()
+            .map_err(|e| format!("could not check observer: {e}"))?
+            .is_none()
+        {
+            return Ok("already_running".into());
+        }
+        *running = None;
     }
 
     let sidecar = resolve_sidecar_path(&app)?;
@@ -62,15 +81,25 @@ fn start_observer(state: State<'_, BeanState>, app: AppHandle) -> Result<String,
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("failed to launch observer helper at {sidecar:?}: {e}"))?;
-    let stdout = child.stdout.take().ok_or_else(|| "observer helper did not provide stdout".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "observer helper did not provide stdout".to_string())?;
 
+    let generation = state.observer.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Ok(mut cached) = state.observer.last_event.lock() {
+        *cached = None;
+    }
     let emit_target = app.clone();
     let observer = state.observer.clone();
     thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().flatten() {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             if !line.trim().is_empty() {
                 if let Ok(event) = serde_json::from_str::<ClaudeEvent>(&line) {
                     if let Ok(mut last_event) = observer.last_event.lock() {
+                        if observer.generation.load(Ordering::SeqCst) != generation {
+                            break;
+                        }
                         *last_event = Some(event.clone());
                     }
                     publish_observer_event(&emit_target, &event);
@@ -85,21 +114,41 @@ fn start_observer(state: State<'_, BeanState>, app: AppHandle) -> Result<String,
 
 #[tauri::command]
 fn get_observer_status(state: State<'_, BeanState>) -> Option<ClaudeEvent> {
-    state.observer.last_event.lock().ok().and_then(|event| event.clone())
+    state
+        .observer
+        .last_event
+        .lock()
+        .ok()
+        .and_then(|event| event.clone())
 }
 
 #[tauri::command]
-async fn stop_observer(state: State<'_, BeanState>) -> Result<String, String> {
-    let mut running = state.observer.child.lock().map_err(|e| format!("observer lock failed: {e}"))?;
+fn stop_observer(state: State<'_, BeanState>) -> Result<String, String> {
+    let mut running = state
+        .observer
+        .child
+        .lock()
+        .map_err(|e| format!("observer lock failed: {e}"))?;
+    state.observer.generation.fetch_add(1, Ordering::SeqCst);
     if let Some(mut child) = running.take() {
         let _ = child.kill();
+        let _ = child.wait();
+    }
+    if let Ok(mut cached) = state.observer.last_event.lock() {
+        *cached = None;
     }
     Ok("stopped".into())
 }
 
 #[tauri::command]
-async fn set_asset_pack_path(path: String, state: State<'_, BeanState>) -> Result<serde_json::Value, String> {
-    let mut lock = state.asset_pack_path.lock().map_err(|e| format!("asset path lock failed: {e}"))?;
+async fn set_asset_pack_path(
+    path: String,
+    state: State<'_, BeanState>,
+) -> Result<serde_json::Value, String> {
+    let mut lock = state
+        .asset_pack_path
+        .lock()
+        .map_err(|e| format!("asset path lock failed: {e}"))?;
     if !Path::new(&path).exists() {
         return Err("path does not exist".into());
     }
@@ -128,36 +177,52 @@ async fn request_accessibility_permission(app: AppHandle) -> Result<bool, String
 }
 
 #[tauri::command]
-fn install_claude_code_hooks(app: AppHandle, include_content: bool) -> Result<String, String> {
+fn install_claude_code_hooks(
+    app: AppHandle,
+    state: State<'_, BeanState>,
+    include_content: bool,
+) -> Result<String, String> {
+    let _guard = state
+        .hook_install
+        .lock()
+        .map_err(|e| format!("hook install lock failed: {e}"))?;
     let sidecar = resolve_sidecar_path(&app)?;
     let quoted_sidecar = format!("'{}'", sidecar.to_string_lossy().replace("'", "'\\''"));
     let home = std::env::var_os("HOME").ok_or("home directory is unavailable")?;
     let claude_dir = PathBuf::from(home).join(".claude");
-    fs::create_dir_all(&claude_dir).map_err(|e| format!("could not create Claude Code settings directory: {e}"))?;
+    fs::create_dir_all(&claude_dir)
+        .map_err(|e| format!("could not create Claude Code settings directory: {e}"))?;
 
     let hook_path = claude_dir.join("bean-claude-code-hook.sh");
-    let hook_script = format!("#!/bin/sh\nset -eu\npgrep -x Bean >/dev/null 2>&1 || exit 0\nexec {quoted_sidecar} --claude-code-hook \"$1\" {}\n", if include_content { "content" } else { "status" });
-    fs::write(&hook_path, hook_script).map_err(|e| format!("could not write Bean's local Claude Code hook: {e}"))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o700))
-            .map_err(|e| format!("could not make Bean's Claude Code hook executable: {e}"))?;
-    }
-
+    let hook_script = format!("#!/bin/sh\nset -eu\n(pgrep -x bean >/dev/null 2>&1 || pgrep -x Bean >/dev/null 2>&1) || exit 0\nexec {quoted_sidecar} --claude-code-hook \"$1\" {}\n", if include_content { "content" } else { "status" });
     let settings_path = claude_dir.join("settings.json");
     let mut settings = if settings_path.exists() {
-        let raw = fs::read_to_string(&settings_path).map_err(|e| format!("could not read Claude Code settings: {e}"))?;
-        serde_json::from_str::<Value>(&raw).map_err(|e| format!("Claude Code settings are not valid JSON; Bean left them unchanged: {e}"))?
+        let raw = fs::read_to_string(&settings_path)
+            .map_err(|e| format!("could not read Claude Code settings: {e}"))?;
+        serde_json::from_str::<Value>(&raw).map_err(|e| {
+            format!("Claude Code settings are not valid JSON; Bean left them unchanged: {e}")
+        })?
     } else {
         json!({})
     };
 
-    let root = settings.as_object_mut().ok_or("Claude Code settings must be a JSON object")?;
+    update_claude_hooks(&mut settings)?;
+    let pretty = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("could not serialize Claude Code settings: {e}"))?;
+    atomic_write(&hook_path, hook_script.as_bytes())?;
+    atomic_write(&settings_path, format!("{pretty}\n").as_bytes())?;
+    Ok("Claude Code hooks installed".into())
+}
+fn update_claude_hooks(settings: &mut Value) -> Result<(), String> {
+    let root = settings
+        .as_object_mut()
+        .ok_or("Claude Code settings must be a JSON object")?;
     let hooks = root.entry("hooks").or_insert_with(|| json!({}));
-    let hooks = hooks.as_object_mut().ok_or("Claude Code hooks must be a JSON object")?;
-    let hook_command = |status: &str| format!("\"$HOME/.claude/bean-claude-code-hook.sh\" {status}");
+    let hooks = hooks
+        .as_object_mut()
+        .ok_or("Claude Code hooks must be a JSON object")?;
+    let hook_command =
+        |status: &str| format!("\"$HOME/.claude/bean-claude-code-hook.sh\" {status}");
 
     for (event, status) in [
         ("UserPromptSubmit", "working"),
@@ -168,21 +233,109 @@ fn install_claude_code_hooks(app: AppHandle, include_content: bool) -> Result<St
         ("SessionEnd", "stopped"),
     ] {
         let groups = hooks.entry(event.to_string()).or_insert_with(|| json!([]));
-        let groups = groups.as_array_mut().ok_or_else(|| format!("Claude Code hook '{event}' must be an array"))?;
-        groups.retain(|group| !group.to_string().contains("bean-claude-code-hook.sh"));
+        let groups = groups
+            .as_array_mut()
+            .ok_or_else(|| format!("Claude Code hook '{event}' must be an array"))?;
+        for group in groups.iter_mut() {
+            if let Some(commands) = group.get_mut("hooks").and_then(Value::as_array_mut) {
+                commands.retain(|hook| {
+                    !hook
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(|command| {
+                            command.starts_with("\"$HOME/.claude/bean-claude-code-hook.sh\" ")
+                        })
+                });
+            }
+        }
+        groups.retain(|group| {
+            !group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+        });
         groups.push(json!({
             "matcher": "",
             "hooks": [{ "type": "command", "command": hook_command(status) }]
         }));
     }
 
-    let pretty = serde_json::to_string_pretty(&settings).map_err(|e| format!("could not serialize Claude Code settings: {e}"))?;
-    fs::write(&settings_path, format!("{pretty}\n")).map_err(|e| format!("could not save Claude Code settings: {e}"))?;
-    Ok("Claude Code hooks installed".into())
+    Ok(())
 }
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let temp = path.with_extension(format!("bean-{}.tmp", std::process::id()));
+    let result = (|| -> std::io::Result<()> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(if path.extension().is_some_and(|ext| ext == "sh") {
+                0o700
+            } else {
+                0o600
+            });
+        }
+        let mut file = options.open(&temp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result.map_err(|e| format!("could not save {}: {e}", path.display()))
+}
+
 #[tauri::command]
 fn get_asset_pack_path(state: State<'_, BeanState>) -> Option<String> {
     state.asset_pack_path.lock().ok().and_then(|s| s.clone())
+}
+
+#[tauri::command]
+fn get_connection_status(app: AppHandle) -> Result<ClaudeEvent, String> {
+    let output = Command::new(resolve_sidecar_path(&app)?)
+        .arg("--connection-status")
+        .output()
+        .map_err(|e| format!("could not inspect Claude: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("Claude helper exited with {}", output.status));
+    }
+    // There can be several installed Claude hosts; prefer a readable one.
+    let events: Vec<ClaudeEvent> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    events
+        .iter()
+        .find(|event| event.status != "unavailable")
+        .or_else(|| events.first())
+        .cloned()
+        .ok_or_else(|| "Claude helper did not return connection status".into())
+}
+
+#[tauri::command]
+fn open_claude() -> Result<(), String> {
+    Command::new("/usr/bin/open")
+        .args(["-b", "com.anthropic.claudefordesktop"])
+        .status()
+        .map_err(|e| format!("could not open Claude Desktop: {e}"))?
+        .success()
+        .then_some(())
+        .ok_or_else(|| "Claude Desktop is not installed".into())
+}
+
+#[tauri::command]
+fn open_accessibility_settings() -> Result<(), String> {
+    Command::new("/usr/bin/open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        .status()
+        .map_err(|e| format!("could not open Accessibility settings: {e}"))?
+        .success()
+        .then_some(())
+        .ok_or_else(|| "could not open Accessibility settings".into())
 }
 
 #[tauri::command]
@@ -192,14 +345,24 @@ fn quit_app(app: AppHandle) {
 
 #[tauri::command]
 fn drag_window(app: AppHandle) -> Result<(), String> {
-    let window = app.get_webview_window("main").ok_or("main window is unavailable")?;
-    window.start_dragging().map_err(|e| format!("could not drag Bean: {e}"))
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window is unavailable")?;
+    window
+        .start_dragging()
+        .map_err(|e| format!("could not drag Bean: {e}"))
 }
 
 #[tauri::command]
 fn set_window_mode(app: AppHandle, compact: bool) -> Result<(), String> {
-    let window = app.get_webview_window("main").ok_or("main window is unavailable")?;
-    let (width, height) = if compact { (272.0, 248.0) } else { (360.0, 370.0) };
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window is unavailable")?;
+    let (width, height) = if compact {
+        (272.0, 248.0)
+    } else {
+        (360.0, 370.0)
+    };
     window
         .set_size(Size::Logical(LogicalSize::new(width, height)))
         .map_err(|e| format!("could not resize Bean: {e}"))
@@ -230,7 +393,9 @@ fn resolve_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Some(path) = candidates.iter().find(|path| path.exists()) {
         return Ok(path.clone());
     }
-    Err(format!("bundled Accessibility helper was not found; checked {candidates:?}"))
+    Err(format!(
+        "bundled Accessibility helper was not found; checked {candidates:?}"
+    ))
 }
 
 fn main() {
@@ -244,25 +409,57 @@ fn main() {
             get_asset_pack_path,
             request_accessibility_permission,
             install_claude_code_hooks,
+            get_connection_status,
+            open_claude,
+            open_accessibility_settings,
             drag_window,
             set_window_mode,
             quit_app
         ])
         .setup(|app| {
-            // Start the observer from the native process. This keeps monitoring
-            // alive even if the webview restores an existing session before its
-            // React effects have registered.
-            let app_handle = app.handle().clone();
-            let state = app.state::<BeanState>();
-            if let Err(error) = start_observer(state, app_handle) {
-                eprintln!("Bean could not start its observer: {error}");
-            }
-
             if let Some(main_window) = app.get_webview_window("main") {
                 let _ = main_window.set_always_on_top(true);
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                let state = app.state::<BeanState>();
+                if let Ok(mut running) = state.observer.child.lock() {
+                    if let Some(mut child) = running.take() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                };
+            }
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn hook_install_preserves_other_commands_and_is_idempotent() {
+        let mut settings = json!({"model": "sonnet", "hooks": {"Stop": [{"matcher": "", "hooks": [
+            {"type": "command", "command": "echo keep-me"},
+            {"type": "command", "command": "\"$HOME/.claude/bean-claude-code-hook.sh\" completed"}
+        ]}]}});
+        update_claude_hooks(&mut settings).unwrap();
+        let first = settings.clone();
+        update_claude_hooks(&mut settings).unwrap();
+        assert_eq!(settings, first);
+        assert_eq!(settings["model"], "sonnet");
+        assert_eq!(
+            settings["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "echo keep-me"
+        );
+        assert_eq!(settings["hooks"]["Stop"].as_array().unwrap().len(), 2);
+    }
+    #[test]
+    fn rejects_malformed_hook_configuration() {
+        assert!(update_claude_hooks(&mut json!({"hooks": []})).is_err());
+        assert!(update_claude_hooks(&mut json!({"hooks": {"Stop": {}}})).is_err());
+    }
 }

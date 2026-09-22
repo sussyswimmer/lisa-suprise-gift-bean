@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.yourname.bean",
   "build": {
-    "beforeBuildCommand": "npm run build",
-    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build:helper && npm run build",
+    "beforeDevCommand": "npm run build:helper && npm run dev",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../dist"
   },
@@ -46,7 +46,8 @@
       "helpers/bean-claude-observer"
     ],
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "minimumSystemVersion": "14.0"
     }
   }
 }
