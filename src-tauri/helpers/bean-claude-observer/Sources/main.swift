@@ -54,11 +54,7 @@ var recentlyEndedClaudeCodeSessions = [String: Date]()
 // No hook says when a permission prompt was answered before the tool finishes,
 // so after this long a waiting session counts as working again.
 let claudeCodeAttentionWindow: TimeInterval = 120
-// Re-show Claude Code only after Bean has been quiet for longer than the
-// app's 6-second completion celebration, which would otherwise swallow it.
-let claudeCodeReassertDelay: TimeInterval = 7
 var lastEmitted: (source: String, session: String?, status: String)?
-var lastEmittedAt = Date.distantPast
 let claudeCodeSessionTimeout: TimeInterval = 30 * 60
 var lastClaudeCodeEventAt: Date?
 var claudeCodeEventsURL = FileManager.default.homeDirectoryForCurrentUser
@@ -78,7 +74,6 @@ func emit(_ source: String, _ session: String?, _ status: String, _ preview: Str
   print(line)
   fflush(stdout)
   lastEmitted = (source, session, status)
-  lastEmittedAt = Date()
 }
 
 func emit(_ observation: DesktopObservation) {
@@ -412,8 +407,11 @@ func resetTracker(_ key: String) {
 }
 
 func pruneClaudeCodeSessions(at date: Date = Date()) {
-  for (session, active) in claudeCodeActiveSessions where date.timeIntervalSince(active.lastEvent) >= claudeCodeSessionTimeout {
-    claudeCodeActiveSessions.removeValue(forKey: session)
+  let expired = claudeCodeActiveSessions.filter { date.timeIntervalSince($0.value.lastEvent) >= claudeCodeSessionTimeout }
+  for session in expired.keys { claudeCodeActiveSessions.removeValue(forKey: session) }
+  // Sessions still running are re-shown by the main loop; report idle only
+  // when none are left.
+  if let session = expired.keys.first, claudeCodeActiveSessions.isEmpty {
     emit("claude_code", session == "unknown" ? nil : session, "idle")
   }
 }
@@ -468,7 +466,14 @@ func recordClaudeCodeEvent(session: String, status: String, at date: Date = Date
     }
   case "reply":
     // A late streamed-text hook must not revive a turn that already stopped.
+    guard claudeCodeActiveSessions[session] != nil else { return nil }
     claudeCodeActiveSessions[session]?.lastEvent = date
+  case "idle":
+    // Claude Code's idle reminder only matters when it ends a turn Bean still
+    // tracks, and only shows when no other session is running.
+    guard claudeCodeActiveSessions.removeValue(forKey: session) != nil else { return nil }
+    recentlyEndedClaudeCodeSessions[session] = date
+    if !claudeCodeActiveSessions.isEmpty { return nil }
   default:
     claudeCodeActiveSessions.removeValue(forKey: session)
     recentlyEndedClaudeCodeSessions[session] = date
@@ -709,6 +714,8 @@ if args.contains("--self-test") {
                "A tool result racing Stop must not revive a session")
   precondition(recordClaudeCodeEvent(session: "early", status: "heartbeat") == "working",
                "A turn that began before the helper must show once its tools report")
+  precondition(recordClaudeCodeEvent(session: "b", status: "reply") == nil, "A reply after Stop must not be shown")
+  precondition(recordClaudeCodeEvent(session: "ghost", status: "idle") == nil, "An idle reminder for no tracked turn is ignored")
   lastEmitted = ("claude_code", "a", "reply")
   precondition(claudeCodeStatusShown(("a", "working")), "A streamed reply already shows the session working")
   precondition(claudeCodeStatusShown(("early", "working")), "Another working session must not be re-shown")
@@ -819,10 +826,10 @@ while true {
     emit(observation)
     desktopShown = true
   }
-  // Once Desktop and Claude Code have both been quiet for a while, show the
-  // Claude Code state that other activity covered up.
-  if !desktopShown, Date().timeIntervalSince(lastEmittedAt) >= claudeCodeReassertDelay,
-     let priority = claudeCodePriority(), !claudeCodeStatusShown(priority) {
+  // Once Desktop goes quiet, show the Claude Code state that other activity
+  // covered up. The app holds anything that arrives during a celebration and
+  // applies it afterwards, so this can be sent right away.
+  if !desktopShown, let priority = claudeCodePriority(), !claudeCodeStatusShown(priority) {
     emit("claude_code", priority.session == "unknown" ? nil : priority.session, priority.status)
   }
   if !observedApp && !hasClaudeCodeHooks {

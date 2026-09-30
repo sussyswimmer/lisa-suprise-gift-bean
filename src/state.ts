@@ -22,6 +22,8 @@ export interface CompanionState {
   unavailable: boolean;
   /** Why monitoring is unavailable, e.g. "permission_denied". */
   unavailableReason: string | null;
+  /** The latest update that arrived during a celebration, applied after it. */
+  heldEvent: ClaudeEvent | null;
   preferences: BeanPrefs;
   lastStatusTs: string | null;
   preview: string | null;
@@ -48,6 +50,7 @@ export const initialState: CompanionState = {
   paused: false,
   unavailable: false,
   unavailableReason: null,
+  heldEvent: null,
   preferences: defaultPrefs,
   lastStatusTs: null,
   preview: null,
@@ -72,6 +75,7 @@ type Action =
   | { type: "setPhotoMode"; photoMode: boolean }
   | { type: "setWelcomeShown" }
   | { type: "loadPrefs"; prefs: unknown }
+  | { type: "releaseHeld" }
   | { type: "resetForSession" };
 
 export function reducer(state: CompanionState, action: Action): CompanionState {
@@ -163,6 +167,15 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
       };
     }
 
+    case "releaseHeld":
+      return state.heldEvent && state.beanState === "happy"
+        ? nextStateFromEvent(
+            state.heldEvent,
+            { ...state, heldEvent: null },
+            { afterCelebration: true },
+          )
+        : state;
+
     case "resetForSession":
       return {
         ...state,
@@ -235,6 +248,7 @@ export function connectionMessage(event: ClaudeEvent): string {
 export function nextStateFromEvent(
   event: ClaudeEvent,
   now: CompanionState,
+  { afterCelebration = false }: { afterCelebration?: boolean } = {},
 ): CompanionState {
   const status = event.status;
 
@@ -255,7 +269,10 @@ export function nextStateFromEvent(
   // Claude reports idle again within a second of finishing; let Bean finish
   // celebrating so the completion is actually noticeable. Work that another
   // session was already doing waits too; new work in the finished one does not.
+  // The latest held update is kept and applied when the celebration ends, so
+  // nothing that arrives meanwhile is lost.
   if (
+    !afterCelebration &&
     now.beanState === "happy" &&
     (status === "idle" ||
       status === "reply" ||
@@ -265,7 +282,7 @@ export function nextStateFromEvent(
     Date.parse(event.timestamp) - Date.parse(now.preferences.lastCompletedAt) <
       CELEBRATION_HOLD_MS
   )
-    return now;
+    return { ...now, heldEvent: event };
   const sameSession =
     now.session === event.session && now.source === event.source;
   const preview =
@@ -280,6 +297,7 @@ export function nextStateFromEvent(
     ...now,
     preview,
     unavailableReason: status === "unavailable" ? (event.reason ?? null) : null,
+    heldEvent: null,
   };
 
   if (status === "unavailable") {
@@ -314,7 +332,8 @@ export function nextStateFromEvent(
       unavailable: false,
       source: event.source,
       session: event.session,
-      beanState: now.beanState === "thinking" ? "thinking" : "idle",
+      // Streaming a reply is still work in progress; Stop confirms completion.
+      beanState: "thinking",
       statusText: "Claude is replying",
       lastStatusTs: event.timestamp,
       preview,

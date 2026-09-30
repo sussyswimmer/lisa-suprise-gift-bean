@@ -227,6 +227,24 @@ describe("completion celebration", () => {
       },
     });
     expect(other.beanState).toBe("happy");
+    expect(other.heldEvent?.session).toBe("code-1");
+    // When the celebration ends the held work is shown, not lost.
+    const after = reducer(other, { type: "releaseHeld" });
+    expect(after.beanState).toBe("thinking");
+    expect(after.session).toBe("code-1");
+    expect(after.heldEvent).toBeNull();
+  });
+  it("shows a streamed reply as work in progress", () => {
+    const replying = reducer(initialState, {
+      type: "claudeEvent",
+      event: {
+        source: "claude_code",
+        session: "s1",
+        status: "reply",
+        timestamp: "2026-09-30T00:00:00Z",
+      },
+    });
+    expect(replying.beanState).toBe("thinking");
   });
   it("remembers why monitoring is unavailable until Claude is back", () => {
     const denied = reducer(initialState, {

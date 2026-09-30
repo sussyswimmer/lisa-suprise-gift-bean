@@ -144,3 +144,31 @@ describe("native event integration", () => {
     );
   });
 });
+
+describe("celebration timing", () => {
+  it("shows work that arrived during a celebration once it ends", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date("2026-09-22T00:00:00Z"));
+    restore();
+    render(<App />);
+    const send = (status: string, session: string, second: number) =>
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("bean-observer-status", {
+            detail: {
+              source: "claude_code",
+              session,
+              status,
+              timestamp: `2026-09-22T00:00:0${second}Z`,
+            },
+          }),
+        );
+      });
+    send("completed", "s1", 0);
+    send("working", "s2", 2);
+    expect(screen.getByText("Reply is ready!")).toBeTruthy();
+    act(() => vi.advanceTimersByTime(6_100));
+    expect(screen.getByText("Claude Code is working")).toBeTruthy();
+    vi.useRealTimers();
+  });
+});

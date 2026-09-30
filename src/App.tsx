@@ -20,6 +20,7 @@ import {
   claudeEventSchema,
 } from "./types";
 import {
+  CELEBRATION_HOLD_MS,
   connectionMessage,
   initialState,
   nextStateFromEvent,
@@ -163,6 +164,20 @@ export default function App() {
       if (next.preferences.soundEnabled && !next.muted) playTone();
     }
   }, []);
+
+  // Apply the update that arrived during a celebration as soon as it ends.
+  useEffect(() => {
+    if (state.beanState !== "happy" || !state.heldEvent) return;
+    const remaining =
+      Date.parse(state.preferences.lastCompletedAt) +
+      CELEBRATION_HOLD_MS -
+      Date.now();
+    const timeoutId = window.setTimeout(
+      () => dispatch({ type: "releaseHeld" }),
+      Number.isFinite(remaining) ? Math.max(0, remaining) : 0,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [state.beanState, state.heldEvent, state.preferences.lastCompletedAt]);
 
   useEffect(() => {
     if (!isBeanDesktop()) return;
