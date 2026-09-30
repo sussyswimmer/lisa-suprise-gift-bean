@@ -781,6 +781,56 @@ if args.contains("--request-permission") {
   emit("system", nil, granted ? "idle" : "unavailable", reason: granted ? nil : "permission_denied")
   exit(0)
 }
+// Prints what Bean can read from Claude's window: control roles and labels
+// only, never message or composer text. Saved from the menu bar so a person
+// can send it along when Bean misreads Claude.
+if args.contains("--diagnose") {
+  print("Bean diagnostics \(now())")
+  print("Accessibility allowed: \(isAccessibilityTrusted())")
+  for bundleID in supportedApps {
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+      .first(where: { !$0.isTerminated }) else {
+      print("\(bundleID): not running")
+      continue
+    }
+    let version = app.bundleURL.flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleShortVersionString"] as? String } ?? "?"
+    print("\(bundleID): running, version \(version)")
+    let appElement = AXUIElementCreateApplication(app.processIdentifier)
+    AXUIElementSetMessagingTimeout(appElement, 1)
+    let activation = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    print("  manual accessibility: \(activation.rawValue)")
+    Thread.sleep(forTimeInterval: 0.8)
+    let windows = candidateWindows(appElement)
+    print("  windows: \(windows.count)")
+    for (index, window) in windows.prefix(6).enumerated() {
+      var controls = [String]()
+      let deadline = Date().addingTimeInterval(4)
+      let inspect: (AXUIElement) -> NodeInfo = { element in
+        let info = inspectElement(element)
+        if !info.labels.isEmpty && controls.count < 120 {
+          controls.append("\(info.role)\(info.selected ? " [selected]" : ""): \(info.labels.joined(separator: " | "))")
+        }
+        return info
+      }
+      let snapshot = scanTree(root: window, maxNodes: 8_000, extraNodesAfterControls: 8_000,
+                              children: childElements, inspect: inspect,
+                              shouldContinue: { Date() < deadline })
+      let reading = directStatus(from: snapshot) ?? "none"
+      print("  window \(index + 1): nodes \(snapshot.visited), web area \(snapshot.readable), composer \(snapshot.hasComposer)")
+      print("    send \(snapshot.hasSendControl), stop \(snapshot.hasStopControl), reads \(reading)")
+      for line in controls { print("    \(line)") }
+    }
+    if let nearby = composerSurroundings(in: appElement) {
+      print("  around composer: send \(nearby.hasSendControl), stop \(nearby.hasStopControl), labels \(nearby.labels.suffix(20))")
+    } else {
+      print("  around composer: composer not focused")
+    }
+    if let observation = observeDesktop(bundleID: bundleID) {
+      print("  Bean shows: \(observation.source) \(observation.status) \(observation.reason ?? "")")
+    }
+  }
+  exit(0)
+}
 if args.contains("--connection-status") {
   guard isAccessibilityTrusted() else {
     emit("system", nil, "unavailable", reason: "permission_denied")

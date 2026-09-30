@@ -587,11 +587,49 @@ fn toggle_bean_visibility(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Writes what the helper can read from Claude's window (control labels
+/// only, no message text) to the Desktop and opens it, so a person can send
+/// it along when Bean misreads Claude.
+fn save_diagnostics(app: &AppHandle) -> Result<(), String> {
+    let sidecar = resolve_sidecar_path(app)?;
+    let output = Command::new(&sidecar)
+        .arg("--diagnose")
+        .output()
+        .map_err(|e| format!("could not run the Accessibility helper: {e}"))?;
+    let mut report = format!(
+        "Bean {}\nHelper: {}\n\n",
+        app.package_info().version,
+        sidecar.display()
+    );
+    report.push_str(&String::from_utf8_lossy(&output.stdout));
+    if !output.stderr.is_empty() {
+        report.push_str("\nErrors:\n");
+        report.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+    let home = std::env::var_os("HOME").ok_or("home directory is unavailable")?;
+    let path = PathBuf::from(home)
+        .join("Desktop")
+        .join("Bean Diagnostics.txt");
+    fs::write(&path, report).map_err(|e| format!("could not save diagnostics: {e}"))?;
+    Command::new("/usr/bin/open")
+        .arg(&path)
+        .status()
+        .map_err(|e| format!("could not open diagnostics: {e}"))?;
+    Ok(())
+}
+
 /// Bean's icon in the macOS menu bar, with Settings, Pause, Show/Hide and Quit.
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
     let pause = MenuItem::with_id(app, "pause", "Pause Monitoring", true, None::<&str>)?;
     let visibility = MenuItem::with_id(app, "visibility", "Hide Bean", true, None::<&str>)?;
+    let diagnostics = MenuItem::with_id(
+        app,
+        "diagnostics",
+        "Save Diagnostics to Desktop",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit Bean", true, Some("CmdOrCtrl+Q"))?;
     let menu = Menu::with_items(
         app,
@@ -601,6 +639,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &pause,
             &visibility,
             &PredefinedMenuItem::separator(app)?,
+            &diagnostics,
             &quit,
         ],
     )?;
@@ -615,6 +654,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 "settings" => open_settings_window(app),
                 "pause" => app.emit_to("main", "bean-tray-action", "toggle-pause"),
                 "visibility" => toggle_bean_visibility(app),
+                "diagnostics" => {
+                    let app = app.clone();
+                    thread::spawn(move || {
+                        if let Err(error) = save_diagnostics(&app) {
+                            eprintln!("Bean diagnostics failed: {error}");
+                        }
+                    });
+                    Ok(())
+                }
                 "quit" => {
                     app.exit(0);
                     Ok(())
@@ -661,7 +709,8 @@ fn resolve_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn main() {
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut app = tauri::Builder::default()
         .manage(BeanState::default())
         .invoke_handler(tauri::generate_handler![
             start_observer,
@@ -683,10 +732,6 @@ fn main() {
             quit_app
         ])
         .setup(|app| {
-            // A menu-bar-only app may place its windows over other apps'
-            // full-screen Spaces; a regular Dock app may not.
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             if let Some(main_window) = app.get_webview_window("main") {
                 let _ = main_window.set_always_on_top(true);
                 follow_all_spaces(&main_window, true);
@@ -695,12 +740,17 @@ fn main() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                let _ = stop_supervised_observer(&app.state::<BeanState>().observer);
-            }
-        });
+        .expect("error while building tauri application");
+    // A menu-bar-only app may place its windows over other apps' full-screen
+    // Spaces; a regular Dock app may not. Set it before launch finishes, or
+    // macOS keeps Bean on the Space where she first appeared.
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    app.run(|app, event| {
+        if let tauri::RunEvent::Exit = event {
+            let _ = stop_supervised_observer(&app.state::<BeanState>().observer);
+        }
+    });
 }
 
 #[cfg(test)]
