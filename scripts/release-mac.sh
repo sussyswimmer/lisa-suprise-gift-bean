@@ -3,7 +3,7 @@
 # publishes them as a GitHub pre-release. Use it while GitHub Actions cannot
 # run macOS jobs; otherwise pushing a v* tag publishes the same release.
 #
-#   scripts/release-mac.sh v0.1.0-test.21
+#   scripts/release-mac.sh v0.1.0-test.22
 #
 # Needs Xcode command-line tools, Rust (rustup), Node.js 22.12+, and a signed-in
 # GitHub CLI (`gh auth login`). Notes come from release-notes/<tag>.md, whose
