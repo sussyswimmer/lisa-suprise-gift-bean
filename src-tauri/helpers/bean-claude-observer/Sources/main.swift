@@ -469,9 +469,9 @@ func recordClaudeCodeEvent(session: String, status: String, at date: Date = Date
     guard claudeCodeActiveSessions[session] != nil else { return nil }
     claudeCodeActiveSessions[session]?.lastEvent = date
   case "idle":
-    // Claude Code's idle reminder only matters when it ends a turn Bean still
-    // tracks, and only shows when no other session is running.
-    guard claudeCodeActiveSessions.removeValue(forKey: session) != nil else { return nil }
+    // Claude Code's idle reminder returns Bean to idle after a turn (nothing
+    // else does when Claude Desktop is closed), unless another session runs.
+    claudeCodeActiveSessions.removeValue(forKey: session)
     recentlyEndedClaudeCodeSessions[session] = date
     if !claudeCodeActiveSessions.isEmpty { return nil }
   default:
@@ -715,7 +715,7 @@ if args.contains("--self-test") {
   precondition(recordClaudeCodeEvent(session: "early", status: "heartbeat") == "working",
                "A turn that began before the helper must show once its tools report")
   precondition(recordClaudeCodeEvent(session: "b", status: "reply") == nil, "A reply after Stop must not be shown")
-  precondition(recordClaudeCodeEvent(session: "ghost", status: "idle") == nil, "An idle reminder for no tracked turn is ignored")
+  precondition(recordClaudeCodeEvent(session: "ghost", status: "idle") == nil, "An idle reminder must not hide running sessions")
   lastEmitted = ("claude_code", "a", "reply")
   precondition(claudeCodeStatusShown(("a", "working")), "A streamed reply already shows the session working")
   precondition(claudeCodeStatusShown(("early", "working")), "Another working session must not be re-shown")
@@ -731,6 +731,8 @@ if args.contains("--self-test") {
   precondition(claudeCodePriority(at: base.addingTimeInterval(3 + claudeCodeAttentionWindow))?.status == "working",
                "An unanswered-looking prompt must not claim attention forever")
   claudeCodeActiveSessions.removeAll()
+  precondition(recordClaudeCodeEvent(session: "done", status: "idle") == "idle",
+               "The idle reminder must return Bean to idle once no turn is running")
   recentlyEndedClaudeCodeSessions.removeAll()
   lastEmitted = nil
   precondition(hookStatus("attention_needed", input: Data(#"{"notification_type":"idle_prompt"}"#.utf8)) == "idle")
@@ -811,6 +813,7 @@ while true {
   // activity is still reported so Chat keeps syncing while Code is open.
   let claudeCodeHoldsStatus = !claudeCodeActiveSessions.isEmpty
     || (lastClaudeCodeEventAt.map { Date().timeIntervalSince($0) < 4 } ?? false)
+  let claudeCodeWaiting = claudeCodePriority()?.status == "attention_needed"
   guard isAccessibilityTrusted() else {
     if !claudeCodeHoldsStatus { emit("system", nil, "unavailable", reason: "permission_denied") }
     waitForNextPoll(1.2)
@@ -823,6 +826,9 @@ while true {
     guard let observation = observeDesktop(bundleID: bundleID) else { continue }
     observedApp = true
     if claudeCodeHoldsStatus && ["idle", "unavailable"].contains(observation.status) { continue }
+    // A Claude Code permission prompt stays on screen over Chat progress for
+    // its attention window; Chat results and Chat's own prompts still show.
+    if claudeCodeWaiting && ["working", "message"].contains(observation.status) { continue }
     emit(observation)
     desktopShown = true
   }
