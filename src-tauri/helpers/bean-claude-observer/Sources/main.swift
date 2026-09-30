@@ -639,30 +639,56 @@ if args.contains("--self-test") {
     snapshot.finish()
     return snapshot
   }
-  let deep = scanTree(root: 0, children: { $0 < 300 ? [$0 + 1] : [] }, inspect: { NodeInfo(role: $0 == 300 ? "AXWebArea" : "AXGroup") })
+  // Fake accessibility trees over Int node ids. Closures are typed explicitly
+  // so the Swift type checker never has to infer a long generic expression.
+  func group(_ role: String = "AXGroup", _ labels: [String] = []) -> NodeInfo {
+    NodeInfo(role: role, labels: labels)
+  }
+  let deepChildren: (Int) -> [Int] = { node in node < 300 ? [node + 1] : [] }
+  let deepInspect: (Int) -> NodeInfo = { node in group(node == 300 ? "AXWebArea" : "AXGroup") }
+  let deep = scanTree(root: 0, children: deepChildren, inspect: deepInspect)
   precondition(deep.readable, "Web surfaces beyond the old 180-node limit must be found")
-  let nativeComposer = scanTree(root: 0, children: { $0 == 0 ? [1, 2] : [] }, inspect: {
-    $0 == 1 ? NodeInfo(role: "AXTextArea") : $0 == 2 ? NodeInfo(role: "AXButton", labels: ["send message"]) : NodeInfo(role: "AXGroup")
-  })
+  let composerChildren: (Int) -> [Int] = { node in node == 0 ? [1, 2] : [] }
+  let composerInspect: (Int) -> NodeInfo = { node in
+    if node == 1 { return group("AXTextArea") }
+    if node == 2 { return group("AXButton", ["send message"]) }
+    return group()
+  }
+  let nativeComposer = scanTree(root: 0, children: composerChildren, inspect: composerInspect)
   precondition(nativeComposer.readable, "A usable composer and send button must work without an AXWebArea wrapper")
-  let bounded = scanTree(root: 0, maxNodes: 180, children: { [$0 + 1] }, inspect: { _ in NodeInfo(role: "AXGroup") })
+  let chainChildren: (Int) -> [Int] = { node in [node + 1] }
+  let plainGroup: (Int) -> NodeInfo = { _ in group() }
+  let bounded = scanTree(root: 0, maxNodes: 180, children: chainChildren, inspect: plainGroup)
   precondition(bounded.incomplete && !bounded.readable, "A truncated tree must not be reported as definitively unreadable")
-  let content = scanTree(root: 0, children: { _ in [1] }, inspect: { _ in NodeInfo(role: "AXTextArea") })
+  let textChildren: (Int) -> [Int] = { _ in [1] }
+  let textArea: (Int) -> NodeInfo = { _ in group("AXTextArea") }
+  let content = scanTree(root: 0, children: textChildren, inspect: textArea)
   precondition(!content.incomplete && !content.readable, "Text content must not be traversed for status detection")
   // Node 1 is an endless conversation; node 2 is the composer that follows it.
-  let longChat = scanTree(root: 0, maxNodes: 200, children: { node -> [Int] in
+  let longChatChildren: (Int) -> [Int] = { node in
     if node == 0 { return [1, 2] }
     if node == 2 { return [3, 4] }
-    return node == 1 || node >= 10 ? [max(node, 9) + 1] : []
-  }, inspect: {
-    $0 == 3 ? NodeInfo(role: "AXTextArea") : $0 == 4 ? NodeInfo(role: "AXButton", labels: ["stop response"]) : NodeInfo(role: "AXGroup")
-  })
+    if node == 1 || node >= 10 { return [max(node, 9) + 1] }
+    return []
+  }
+  let longChatInspect: (Int) -> NodeInfo = { node in
+    if node == 3 { return group("AXTextArea") }
+    if node == 4 { return group("AXButton", ["stop response"]) }
+    return group()
+  }
+  let longChat = scanTree(root: 0, maxNodes: 200, children: longChatChildren, inspect: longChatInspect)
   precondition(directStatus(from: longChat) == "working", "The composer after a long conversation must be read within budget")
-  let tree = [0: [1, 2], 1: [3, 4], 2: [5]]
-  let parents = [1: 0, 2: 0, 3: 1, 4: 1, 5: 2]
-  let around = scanAround(start: 3, parent: { parents[$0] }, children: { tree[$0] ?? [] }, inspect: {
-    $0 == 3 ? NodeInfo(role: "AXTextArea") : $0 == 5 ? NodeInfo(role: "AXButton", labels: ["send message"]) : NodeInfo(role: "AXGroup")
-  }, same: { $0 == $1 })
+  let tree: [Int: [Int]] = [0: [1, 2], 1: [3, 4], 2: [5]]
+  let parents: [Int: Int] = [1: 0, 2: 0, 3: 1, 4: 1, 5: 2]
+  let aroundParent: (Int) -> Int? = { node in parents[node] }
+  let aroundChildren: (Int) -> [Int] = { node in tree[node] ?? [] }
+  let aroundInspect: (Int) -> NodeInfo = { node in
+    if node == 3 { return group("AXTextArea") }
+    if node == 5 { return group("AXButton", ["send message"]) }
+    return group()
+  }
+  let sameNode: (Int, Int) -> Bool = { first, second in first == second }
+  let around = scanAround(start: 3, parent: aroundParent, children: aroundChildren, inspect: aroundInspect, same: sameNode)
   precondition(around.readable && directStatus(from: around) == "idle", "The focused composer must lead to its Send control")
   precondition(directStatus(from: buttons(["extended thinking", "send message"])) == "idle", "Composer options must not look like work")
   precondition(directStatus(from: buttons(["stop response"])) == "working")
