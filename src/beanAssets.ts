@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { BeanAsset, BeanAssetKey, BeanManifest } from "./types";
+import {
+  ActivityArt,
+  BeanAsset,
+  BeanAssetKey,
+  BeanManifest,
+  IdleActivity,
+} from "./types";
+import { ACTIVITY_LABELS } from "./activity";
 
 export const DEFAULT_ASSET_PACK: BeanManifest = {
   version: "1.0",
@@ -39,7 +46,21 @@ const manifestSchema = z.object({
   motions: z
     .object({ run: assetSchema.optional(), walk: assetSchema.optional() })
     .optional(),
+  // A record rather than an object so an unknown activity name from a newer
+  // pack is ignored instead of rejecting the whole manifest.
+  activities: z.record(z.string(), assetSchema).optional(),
 });
+
+function knownActivities(
+  activities: Record<string, BeanAsset> | undefined,
+): ActivityArt | undefined {
+  if (!activities) return undefined;
+  return Object.fromEntries(
+    Object.entries(activities).filter(
+      ([name]) => name !== "breathe" && name in ACTIVITY_LABELS,
+    ),
+  ) as Partial<Record<IdleActivity, BeanAsset>>;
+}
 
 export async function loadManifest(): Promise<BeanManifest> {
   try {
@@ -48,7 +69,11 @@ export async function loadManifest(): Promise<BeanManifest> {
       return DEFAULT_ASSET_PACK;
     }
     const parsed = manifestSchema.safeParse(await resp.json());
-    return parsed.success ? parsed.data : DEFAULT_ASSET_PACK;
+    if (!parsed.success) return DEFAULT_ASSET_PACK;
+    return {
+      ...parsed.data,
+      activities: knownActivities(parsed.data.activities),
+    };
   } catch {
     return DEFAULT_ASSET_PACK;
   }
@@ -64,6 +89,7 @@ export function preloadAssets(manifest: BeanManifest) {
   const assets = [
     ...Object.values(manifest.states),
     ...Object.values(manifest.motions ?? {}),
+    ...Object.values(manifest.activities ?? {}),
   ];
   for (const source of new Set(assets.map(assetSource))) {
     new Image().src = source;

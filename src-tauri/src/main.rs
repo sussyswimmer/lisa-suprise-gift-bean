@@ -9,7 +9,12 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size, State};
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{
+    AppHandle, Emitter, LogicalSize, Manager, Size, State, WebviewUrl, WebviewWindowBuilder, Wry,
+};
 
 #[derive(Serialize, Deserialize, Clone)]
 struct ClaudeEvent {
@@ -28,6 +33,12 @@ struct ObserverState {
     // Generation of the running supervisor, or 0 when Bean is not observing.
     active_generation: AtomicU64,
     last_event: Mutex<Option<ClaudeEvent>>,
+}
+
+/// Menu bar items whose text follows Bean's state.
+struct TrayItems {
+    pause: MenuItem<Wry>,
+    visibility: MenuItem<Wry>,
 }
 
 #[derive(Default)]
@@ -459,18 +470,140 @@ fn drag_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_window_mode(app: AppHandle, compact: bool) -> Result<(), String> {
+fn set_window_mode(app: AppHandle, compact: bool, scale: Option<f64>) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or("main window is unavailable")?;
+    // Bean's size setting scales her 140 px box from her feet; grow the
+    // window by the same amount so she never overlaps her speech bubble.
+    let scale = scale.unwrap_or(1.0).clamp(0.5, 2.0);
     let (width, height) = if compact {
-        (272.0, 248.0)
+        (272.0, 248.0 + 140.0 * (scale - 1.0))
     } else {
         (360.0, 370.0)
     };
     window
         .set_size(Size::Logical(LogicalSize::new(width, height)))
         .map_err(|e| format!("could not resize Bean: {e}"))
+}
+
+#[tauri::command]
+fn set_always_on_top(app: AppHandle, on_top: bool) -> Result<(), String> {
+    app.get_webview_window("main")
+        .ok_or("main window is unavailable")?
+        .set_always_on_top(on_top)
+        .map_err(|e| format!("could not change Bean's window level: {e}"))
+}
+
+#[tauri::command]
+fn reset_window_position(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window is unavailable")?;
+    window
+        .show()
+        .and_then(|_| window.center())
+        .map_err(|e| format!("could not move Bean: {e}"))?;
+    sync_visibility_item(&app);
+    Ok(())
+}
+
+/// Bean's window reports pause changes so the menu bar item reads correctly.
+#[tauri::command]
+fn set_tray_state(app: AppHandle, paused: bool) -> Result<(), String> {
+    let items = app.state::<TrayItems>();
+    items
+        .pause
+        .set_text(if paused {
+            "Resume Monitoring"
+        } else {
+            "Pause Monitoring"
+        })
+        .map_err(|e| format!("could not update the menu bar: {e}"))
+}
+
+fn sync_visibility_item(app: &AppHandle) {
+    let visible = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(true);
+    if let Some(items) = app.try_state::<TrayItems>() {
+        let _ = items
+            .visibility
+            .set_text(if visible { "Hide Bean" } else { "Show Bean" });
+    }
+}
+
+fn open_settings_window(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window.show()?;
+        window.unminimize()?;
+        return window.set_focus();
+    }
+    // The same page as Bean's window; it renders Settings for this label.
+    let window = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+        .title("Bean Settings")
+        .inner_size(720.0, 560.0)
+        .min_inner_size(600.0, 460.0)
+        .center()
+        .focused(true)
+        .build()?;
+    window.set_focus()
+}
+
+fn toggle_bean_visibility(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_visible()? {
+            window.hide()?;
+        } else {
+            window.show()?;
+        }
+    }
+    sync_visibility_item(app);
+    Ok(())
+}
+
+/// Bean's icon in the macOS menu bar, with Settings, Pause, Show/Hide and Quit.
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+    let pause = MenuItem::with_id(app, "pause", "Pause Monitoring", true, None::<&str>)?;
+    let visibility = MenuItem::with_id(app, "visibility", "Hide Bean", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Bean", true, Some("CmdOrCtrl+Q"))?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &settings,
+            &PredefinedMenuItem::separator(app)?,
+            &pause,
+            &visibility,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
+    )?;
+    TrayIconBuilder::with_id("bean")
+        .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
+        // A template image follows the menu bar's light or dark appearance.
+        .icon_as_template(true)
+        .tooltip("Bean")
+        .menu(&menu)
+        .on_menu_event(|app, event| {
+            let result = match event.id.as_ref() {
+                "settings" => open_settings_window(app),
+                "pause" => app.emit_to("main", "bean-tray-action", "toggle-pause"),
+                "visibility" => toggle_bean_visibility(app),
+                "quit" => {
+                    app.exit(0);
+                    Ok(())
+                }
+                _ => Ok(()),
+            };
+            if let Err(error) = result {
+                eprintln!("Bean menu bar action failed: {error}");
+            }
+        })
+        .build(app)?;
+    app.manage(TrayItems { pause, visibility });
+    Ok(())
 }
 
 fn resolve_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -520,12 +653,16 @@ fn main() {
             open_accessibility_settings,
             drag_window,
             set_window_mode,
+            set_always_on_top,
+            reset_window_position,
+            set_tray_state,
             quit_app
         ])
         .setup(|app| {
             if let Some(main_window) = app.get_webview_window("main") {
                 let _ = main_window.set_always_on_top(true);
             }
+            build_tray(app.handle())?;
             Ok(())
         })
         .build(tauri::generate_context!())

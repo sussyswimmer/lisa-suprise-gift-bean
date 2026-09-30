@@ -51,5 +51,81 @@
       "columns": 6,
       "facing": "left"
     }
+  },
+  "activities": {
+    "boba": {
+      "src": "/bean/sprites/boba.png",
+      "frames": 24,
+      "fps": 10,
+      "columns": 6,
+      "rows": 4
+    },
+    "volleyball": {
+      "src": "/bean/sprites/volleyball.png",
+      "frames": 24,
+      "fps": 10,
+      "columns": 6,
+      "rows": 4,
+      "scale": 1.8
+    },
+    "bone": {
+      "src": "/bean/sprites/bone.png",
+      "frames": 24,
+      "fps": 10,
+      "columns": 6,
+      "rows": 4
+    },
+    "read": {
+      "src": "/bean/sprites/read.png",
+      "frames": 24,
+      "fps": 8,
+      "columns": 6,
+      "rows": 4
+    },
+    "ball": {
+      "src": "/bean/sprites/ball.png",
+      "frames": 24,
+      "fps": 10,
+      "columns": 6,
+      "rows": 4
+    },
+    "music": {
+      "src": "/bean/sprites/music.png",
+      "frames": 24,
+      "fps": 10,
+      "columns": 6,
+      "rows": 4
+    },
+    "dance": {
+      "src": "/bean/sprites/dance.png",
+      "frames": 24,
+      "fps": 12,
+      "columns": 6,
+      "rows": 4
+    },
+    "chase": {
+      "src": "/bean/sprites/chase.png",
+      "frames": 24,
+      "fps": 12,
+      "columns": 6,
+      "rows": 4,
+      "scale": 1.2
+    },
+    "stretch": {
+      "src": "/bean/sprites/stretch.png",
+      "frames": 24,
+      "fps": 10,
+      "columns": 6,
+      "rows": 4,
+      "scale": 1.15
+    },
+    "sniff": {
+      "src": "/bean/sprites/sniff.png",
+      "frames": 24,
+      "fps": 10,
+      "columns": 6,
+      "rows": 4,
+      "facing": "left"
+    }
   }
 }

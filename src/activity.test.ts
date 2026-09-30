@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { activitiesFor, motionFor, nextActivity } from "./activity";
+import {
+  activitiesFor,
+  activityDurationMs,
+  motionFor,
+  nextActivity,
+  restDelayMs,
+} from "./activity";
 
 describe("Bean idle activities", () => {
   it("never repeats the activity that just played", () => {
@@ -18,5 +24,34 @@ describe("Bean idle activities", () => {
     expect(motionFor("arrive")).toBe("run");
     expect(motionFor("patrol")).toBe("walk");
     expect(motionFor("sniff")).toBeNull();
+  });
+  it("offers prop activities only when their sprite sheet exists", () => {
+    expect(activitiesFor("idle")).not.toContain("volleyball");
+    const available = new Set(["volleyball", "boba"] as const);
+    expect(activitiesFor("idle", { available })).toContain("volleyball");
+    expect(activitiesFor("idle", { available })).not.toContain("dance");
+  });
+  it("skips activities switched off in Settings", () => {
+    const disabled = ["zoomies", "boba", "peek"];
+    const choices = activitiesFor("idle", { disabled });
+    for (const name of disabled) expect(choices).not.toContain(name);
+    expect(choices).toContain("sniff");
+    for (const random of [0, 0.5, 0.999])
+      expect(disabled).not.toContain(
+        nextActivity("idle", "breathe", () => random, { disabled }),
+      );
+  });
+  it("just breathes when every activity is switched off", () => {
+    const disabled = activitiesFor("idle");
+    expect(nextActivity("idle", "breathe", () => 0.5, { disabled })).toBe(
+      "breathe",
+    );
+  });
+  it("plays a looping sheet twice and rests for the chosen frequency", () => {
+    const sheet = { src: "/boba.png", frames: 24, fps: 10 };
+    expect(activityDurationMs("boba", sheet)).toBe(4_800);
+    expect(activityDurationMs("boba")).toBe(4_200);
+    expect(restDelayMs("calm", () => 0)).toBe(14_000);
+    expect(restDelayMs("lively", () => 0.999)).toBeLessThan(6_000);
   });
 });

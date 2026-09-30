@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   useCallback,
   useEffect,
   useMemo,
@@ -20,12 +21,15 @@ import {
   claudeEventSchema,
 } from "./types";
 import {
+  BeanSize,
   CELEBRATION_HOLD_MS,
   connectionMessage,
   initialState,
   nextStateFromEvent,
   reducer,
 } from "./state";
+import { isBeanDesktop, playTone } from "./platform";
+import { onMessageToBean, sendFromBean } from "./settingsBus";
 import {
   DEFAULT_ASSET_PACK,
   loadManifest,
@@ -35,36 +39,11 @@ import {
 
 const PREFS_KEY = "bean.preferences.v1";
 
-// `window.isTauri` is only present when the optional global Tauri API is
-// enabled. The module API works without that global, so detect its internal
-// bridge instead and keep the production bundle connected to Rust.
-function isBeanDesktop() {
-  if (typeof window === "undefined") return false;
-
-  // Tauri's internal object is injected asynchronously in some packaged
-  // builds.  The app is already running at a tauri: URL, though, so relying
-  // only on that object can prevent the first native status sync and leave
-  // Bean showing an old permission warning forever.
-  return (
-    window.location.protocol === "tauri:" || "__TAURI_INTERNALS__" in window
-  );
-}
-
-function playTone() {
-  if (typeof AudioContext === "undefined") return;
-  const context = new AudioContext();
-  const osc = context.createOscillator();
-  const gain = context.createGain();
-  osc.type = "triangle";
-  osc.frequency.value = 620;
-  gain.gain.value = 0.02;
-  osc.connect(gain).connect(context.destination);
-  osc.start();
-  osc.onended = () => {
-    void context.close();
-  };
-  osc.stop(context.currentTime + 0.25);
-}
+const BEAN_SCALE: Record<BeanSize, number> = {
+  small: 0.8,
+  medium: 1,
+  large: 1.25,
+};
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState, (fallback) => {
@@ -117,12 +96,64 @@ export default function App() {
     }
   }, []);
 
+  const beanScale = BEAN_SCALE[state.preferences.beanSize] ?? 1;
   useEffect(() => {
     if (!isBeanDesktop()) return;
     void invoke("set_window_mode", {
       compact: state.preferences.welcomeShown,
+      scale: beanScale,
     }).catch((error) => setAccessMessage(String(error)));
-  }, [state.preferences.welcomeShown]);
+  }, [state.preferences.welcomeShown, beanScale]);
+
+  useEffect(() => {
+    if (!isBeanDesktop()) return;
+    void invoke("set_always_on_top", {
+      onTop: state.preferences.alwaysOnTop,
+    }).catch((error) => setAccessMessage(String(error)));
+  }, [state.preferences.alwaysOnTop]);
+
+  // Keep the menu bar's Pause/Resume item in step with Bean.
+  useEffect(() => {
+    if (!isBeanDesktop()) return;
+    void invoke("set_tray_state", { paused: state.paused }).catch(
+      () => undefined,
+    );
+  }, [state.paused]);
+
+  // The Settings window asks Bean's window to change preferences; this window
+  // saves them and reports every change back.
+  useEffect(
+    () =>
+      onMessageToBean((message) => {
+        if (message.type === "patch")
+          dispatch({ type: "patchPrefs", patch: message.patch });
+        else if (message.type === "reset") dispatch({ type: "resetSettings" });
+        else {
+          const current = stateRef.current;
+          sendFromBean({
+            type: "prefs",
+            prefs: current.preferences,
+            status: {
+              paused: current.paused,
+              unavailable: current.unavailable,
+              statusText: current.statusText,
+            },
+          });
+        }
+      }),
+    [],
+  );
+  useEffect(() => {
+    sendFromBean({
+      type: "prefs",
+      prefs: state.preferences,
+      status: {
+        paused: state.paused,
+        unavailable: state.unavailable,
+        statusText: state.statusText,
+      },
+    });
+  }, [state.preferences, state.paused, state.unavailable, state.statusText]);
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -161,7 +192,8 @@ export default function App() {
       payload.status === "completed" &&
       next.preferences.lastEventKey !== current.preferences.lastEventKey
     ) {
-      if (next.preferences.soundEnabled && !next.muted) playTone();
+      if (next.preferences.soundEnabled && !next.muted)
+        playTone(next.preferences.soundVolume);
     }
   }, []);
 
@@ -198,6 +230,26 @@ export default function App() {
       unlisten?.();
     };
   }, [applyObserverEvent]);
+
+  // "Pause Monitoring" in the menu bar.
+  useEffect(() => {
+    if (!isBeanDesktop()) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen<string>("bean-tray-action", (event) => {
+      if (active && event.payload === "toggle-pause")
+        dispatch({ type: "setPaused", paused: !stateRef.current.paused });
+    })
+      .then((remove) => {
+        if (active) unlisten = remove;
+        else remove();
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     const receiveNativeStatus = (event: Event) => {
@@ -398,6 +450,7 @@ export default function App() {
   return (
     <div
       className={`app-shell${state.preferences.welcomeShown ? "" : " app-welcome"}`}
+      style={{ "--bean-scale": beanScale } as CSSProperties}
     >
       {state.preferences.welcomeShown ? (
         <main className="shell-content">
@@ -451,6 +504,10 @@ export default function App() {
             asset={currentAsset}
             restAsset={mappedAsset.idle}
             motions={assetPackPath ? {} : manifest.motions}
+            activities={assetPackPath ? {} : manifest.activities}
+            disabledActivities={state.preferences.disabledActivities}
+            activityFrequency={state.preferences.activityFrequency}
+            showBubble={state.preferences.showBubble}
             onDragStart={handleDrag}
           />
           <ControlPanel

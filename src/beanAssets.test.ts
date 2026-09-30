@@ -77,4 +77,20 @@ describe("external data validation", () => {
       claudeEventSchema.safeParse({ ...event, status: "unknown" }).success,
     ).toBe(false);
   });
+  it("keeps activity sheets and ignores activities it does not know", async () => {
+    const boba = { src: "/bean/sprites/boba.png", frames: 24, fps: 10 };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          ...DEFAULT_ASSET_PACK,
+          activities: { boba, skateboard: boba },
+        }),
+      }),
+    );
+    const manifest = await loadManifest();
+    expect(manifest.states).toEqual(DEFAULT_ASSET_PACK.states);
+    expect(manifest.activities).toEqual({ boba });
+  });
 });

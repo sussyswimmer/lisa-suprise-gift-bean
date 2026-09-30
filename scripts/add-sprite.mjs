@@ -5,7 +5,8 @@
 //   npm run add:sprite -- happy ~/Downloads/bean-jump.png --frames 16 --columns 4
 //
 // Targets are Bean's states (idle, noticed, thinking, message, happy, sleepy,
-// soundOff) or her motions (run, walk). Frames and columns default to a grid
+// soundOff), her motions (run, walk) or her idle activities (boba,
+// volleyball, bone, read, ball, music, dance, chase, stretch, sniff). Frames and columns default to a grid
 // of square --frame-size cells (256 px, AutoSprite's default).
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -14,6 +15,7 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const states = ["idle", "noticed", "thinking", "message", "happy", "sleepy", "soundOff"];
 const motions = ["run", "walk"];
+const activities = ["boba", "volleyball", "bone", "read", "ball", "music", "dance", "chase", "stretch", "sniff"];
 
 const [target, source, ...rest] = process.argv.slice(2);
 const options = {};
@@ -22,8 +24,8 @@ for (let i = 0; i < rest.length; i += 2) {
     throw new Error(`Expected --option value pairs, received ${rest.slice(i).join(" ")}`);
   options[rest[i].slice(2)] = rest[i + 1];
 }
-if (![...states, ...motions].includes(target) || !source)
-  throw new Error(`Usage: npm run add:sprite -- <${[...states, ...motions].join("|")}> <sheet.png> [--fps 12] [--frames n] [--columns n] [--frame-size 256] [--facing left|right] [--loop false] [--scale 1.4]`);
+if (![...states, ...motions, ...activities].includes(target) || !source)
+  throw new Error(`Usage: npm run add:sprite -- <${[...states, ...motions, ...activities].join("|")}> <sheet.png> [--fps 12] [--frames n] [--columns n] [--frame-size 256] [--facing left|right] [--loop false] [--scale 1.4]`);
 
 const png = readFileSync(source);
 if (png.toString("ascii", 1, 4) !== "PNG") throw new Error(`${source} is not a PNG file`);
@@ -64,6 +66,7 @@ const manifestPath = join(root, "public/bean/manifest.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 manifest.version = "2.0";
 if (states.includes(target)) manifest.states[target] = sprite;
-else manifest.motions = { ...manifest.motions, [target]: sprite };
+else if (motions.includes(target)) manifest.motions = { ...manifest.motions, [target]: sprite };
+else manifest.activities = { ...manifest.activities, [target]: sprite };
 writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 console.log(`Added ${basename(source)} as ${target}: ${frames} frames, ${columns} per row, ${fps} fps`);

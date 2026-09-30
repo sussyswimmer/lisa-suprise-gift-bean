@@ -130,4 +130,53 @@ describe("Bean animations", () => {
       backgroundPosition: "100% 66.66666666666666%",
     });
   });
+
+  it("plays an activity's own sprite sheet instead of the CSS version", () => {
+    // With peek off there are 7 choices; 0.2 picks the second, boba.
+    vi.spyOn(Math, "random").mockReturnValue(0.2);
+    const boba: SpriteAsset = {
+      src: "/bean/sprites/boba.png",
+      frames: 24,
+      fps: 10,
+    };
+    const view = render(
+      <BeanCompanion
+        state="idle"
+        asset="/idle.png"
+        activities={{ boba }}
+        disabledActivities={["peek"]}
+        statusText="Waiting and watching"
+        source="chat"
+        session={null}
+        preview={null}
+        onDragStart={() => undefined}
+      />,
+    );
+    act(() => vi.advanceTimersByTime(11_000));
+    const stage = view.container.querySelector<HTMLElement>(".bean-stage")!;
+    expect(stage.dataset.activity).toBe("boba");
+    expect(stage.className).toContain("idle-activity-sheet");
+    expect(
+      view.container.querySelector<HTMLElement>(".is-sprite")?.style
+        .backgroundImage,
+    ).toContain("boba.png");
+    expect(view.container.querySelector(".boba-cup")).toBeNull();
+    vi.restoreAllMocks();
+  });
+
+  it("hides the speech bubble when Settings turns it off", () => {
+    const view = render(
+      <BeanCompanion
+        state="idle"
+        asset="/idle.png"
+        showBubble={false}
+        statusText="Waiting and watching"
+        source="chat"
+        session={null}
+        preview={null}
+        onDragStart={() => undefined}
+      />,
+    );
+    expect(view.container.querySelector(".activity-bubble")).toBeNull();
+  });
 });

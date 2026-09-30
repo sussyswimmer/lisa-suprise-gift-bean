@@ -12,12 +12,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { initialState } from "./state";
 
-const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
+const native = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  listen: vi.fn(),
+  emit: vi.fn(),
+}));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: native.invoke,
   convertFileSrc: (path: string) => path,
 }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: native.listen }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: native.listen,
+  emit: native.emit,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -28,6 +35,7 @@ beforeEach(() => {
   });
   native.invoke.mockResolvedValue(null);
   native.listen.mockResolvedValue(vi.fn());
+  native.emit.mockResolvedValue(undefined);
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
 });
 afterEach(() => {
@@ -170,5 +178,66 @@ describe("celebration timing", () => {
     act(() => vi.advanceTimersByTime(6_100));
     expect(screen.getByText("Claude Code is working")).toBeTruthy();
     vi.useRealTimers();
+  });
+});
+
+describe("menu bar and Settings window", () => {
+  function handlers() {
+    const byName = new Map<string, (event: { payload: unknown }) => void>();
+    native.listen.mockImplementation(
+      async (name: string, handler: (event: { payload: unknown }) => void) => {
+        byName.set(name, handler);
+        return vi.fn();
+      },
+    );
+    return byName;
+  }
+
+  it("pauses from the menu bar and updates its menu item", async () => {
+    restore();
+    const byName = handlers();
+    render(<App />);
+    await waitFor(() => expect(byName.has("bean-tray-action")).toBe(true));
+    act(() => byName.get("bean-tray-action")!({ payload: "toggle-pause" }));
+    expect(screen.getByText("Paused")).toBeTruthy();
+    await waitFor(() =>
+      expect(native.invoke).toHaveBeenCalledWith("set_tray_state", {
+        paused: true,
+      }),
+    );
+  });
+
+  it("applies and saves changes sent from the Settings window", async () => {
+    restore();
+    const byName = handlers();
+    render(<App />);
+    await waitFor(() => expect(byName.has("bean-settings-to-main")).toBe(true));
+    act(() =>
+      byName.get("bean-settings-to-main")!({
+        payload: {
+          type: "patch",
+          patch: { beanSize: "large", alwaysOnTop: false },
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(native.invoke).toHaveBeenCalledWith("set_window_mode", {
+        compact: true,
+        scale: 1.25,
+      }),
+    );
+    expect(native.invoke).toHaveBeenCalledWith("set_always_on_top", {
+      onTop: false,
+    });
+    const saved = JSON.parse(localStorage.getItem("bean.preferences.v1")!);
+    expect(saved.preferences.beanSize).toBe("large");
+    // Bean reports the new settings back to the Settings window.
+    expect(native.emit).toHaveBeenCalledWith(
+      "bean-settings-from-main",
+      expect.objectContaining({
+        type: "prefs",
+        prefs: expect.objectContaining({ beanSize: "large" }),
+      }),
+    );
   });
 });

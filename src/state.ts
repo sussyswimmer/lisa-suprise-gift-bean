@@ -1,4 +1,7 @@
 import { ClaudeEvent, BeanState } from "./types";
+import { ActivityFrequency } from "./activity";
+
+export type BeanSize = "small" | "medium" | "large";
 
 export interface BeanPrefs {
   soundEnabled: boolean;
@@ -10,6 +13,18 @@ export interface BeanPrefs {
   manualMessage: string;
   lastCompletedAt: string;
   lastEventKey: string | null;
+  /** Idle activities switched off in Settings. */
+  disabledActivities: string[];
+  activityFrequency: ActivityFrequency;
+  beanSize: BeanSize;
+  alwaysOnTop: boolean;
+  showBubble: boolean;
+  /** Completion chime volume, 0 to 100. */
+  soundVolume: number;
+  /** Jump when Claude finishes; otherwise Bean just goes back to idling. */
+  celebrateCompletions: boolean;
+  /** Alert when Claude needs you; otherwise Bean stays calm. */
+  alertOnAttention: boolean;
 }
 
 export interface CompanionState {
@@ -39,7 +54,36 @@ const defaultPrefs: BeanPrefs = {
   manualMessage: "Official Bean report: you are very loved.",
   lastCompletedAt: "",
   lastEventKey: null,
+  disabledActivities: [],
+  activityFrequency: "normal",
+  beanSize: "medium",
+  alwaysOnTop: true,
+  showBubble: true,
+  soundVolume: 60,
+  celebrateCompletions: true,
+  alertOnAttention: true,
 };
+
+/** Preferences a person changes in Settings (not Bean's own bookkeeping). */
+export const SETTINGS_KEYS = [
+  "soundEnabled",
+  "showContent",
+  "paused",
+  "disabledActivities",
+  "activityFrequency",
+  "beanSize",
+  "alwaysOnTop",
+  "showBubble",
+  "soundVolume",
+  "celebrateCompletions",
+  "alertOnAttention",
+] as const satisfies readonly (keyof BeanPrefs)[];
+
+export type SettingsPatch = Partial<
+  Pick<BeanPrefs, (typeof SETTINGS_KEYS)[number]>
+>;
+
+export const defaultPreferences: BeanPrefs = defaultPrefs;
 
 export const initialState: CompanionState = {
   beanState: "sleepy",
@@ -75,6 +119,8 @@ type Action =
   | { type: "setPhotoMode"; photoMode: boolean }
   | { type: "setWelcomeShown" }
   | { type: "loadPrefs"; prefs: unknown }
+  | { type: "patchPrefs"; patch: SettingsPatch }
+  | { type: "resetSettings" }
   | { type: "releaseHeld" }
   | { type: "resetForSession" };
 
@@ -167,6 +213,29 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
       };
     }
 
+    case "patchPrefs": {
+      const allowed = Object.fromEntries(
+        Object.entries(action.patch).filter(([key]) =>
+          (SETTINGS_KEYS as readonly string[]).includes(key),
+        ),
+      );
+      const safe = sanitizePrefs(
+        { ...state.preferences, ...allowed },
+        state.preferences,
+      );
+      const next = { ...state, preferences: safe, muted: !safe.soundEnabled };
+      if (safe.paused !== state.paused)
+        return reducer(next, { type: "setPaused", paused: safe.paused });
+      return next;
+    }
+
+    case "resetSettings": {
+      const reset = Object.fromEntries(
+        SETTINGS_KEYS.map((key) => [key, defaultPrefs[key]]),
+      ) as SettingsPatch;
+      return reducer(state, { type: "patchPrefs", patch: reset });
+    }
+
     case "releaseHeld":
       return state.heldEvent && state.beanState === "happy"
         ? nextStateFromEvent(
@@ -200,16 +269,41 @@ export function sanitizePrefs(
   if (!value || typeof value !== "object" || Array.isArray(value))
     return { ...fallback };
   const input = value as Record<string, unknown>;
-  return Object.fromEntries(
+  const prefs = Object.fromEntries(
     Object.entries(fallback).map(([key, defaultValue]) => [
       key,
-      (typeof input[key] === typeof defaultValue && input[key] !== null) ||
+      (typeof input[key] === typeof defaultValue &&
+        input[key] !== null &&
+        Array.isArray(input[key]) === Array.isArray(defaultValue)) ||
       (key === "lastEventKey" &&
         (input[key] === null || typeof input[key] === "string"))
         ? input[key]
         : defaultValue,
     ]),
   ) as unknown as BeanPrefs;
+  return {
+    ...prefs,
+    disabledActivities: prefs.disabledActivities.filter(
+      (name): name is string => typeof name === "string",
+    ),
+    activityFrequency: oneOf(
+      prefs.activityFrequency,
+      ["calm", "normal", "lively"],
+      fallback.activityFrequency,
+    ),
+    beanSize: oneOf(
+      prefs.beanSize,
+      ["small", "medium", "large"],
+      fallback.beanSize,
+    ),
+    soundVolume: Number.isFinite(prefs.soundVolume)
+      ? Math.min(100, Math.max(0, Math.round(prefs.soundVolume)))
+      : fallback.soundVolume,
+  };
+}
+
+function oneOf<T extends string>(value: string, options: T[], fallback: T): T {
+  return (options as string[]).includes(value) ? (value as T) : fallback;
 }
 
 /** How long "Reply is ready!" stays up before quiet updates replace it. */
@@ -357,7 +451,7 @@ export function nextStateFromEvent(
       unavailable: false,
       source: event.source,
       session: event.session,
-      beanState: "happy",
+      beanState: now.preferences.celebrateCompletions ? "happy" : "idle",
       preview,
       statusText: "Done — a completion heartbeat arrived",
       lastStatusTs: event.timestamp,
@@ -375,7 +469,7 @@ export function nextStateFromEvent(
       unavailable: false,
       source: event.source,
       session: event.session,
-      beanState: "noticed",
+      beanState: now.preferences.alertOnAttention ? "noticed" : "idle",
       statusText: "Needs attention",
       lastStatusTs: event.timestamp,
     };

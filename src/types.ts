@@ -56,10 +56,32 @@ export type BeanAssetState = Record<BeanAssetKey, BeanAsset>;
 /** Optional movement art used while Bean travels around her window. */
 export type BeanMotion = "run" | "walk";
 
+/** Little things Bean does on her own while Claude is quiet. */
+export type IdleActivity =
+  | "breathe"
+  | "peek"
+  | "hop"
+  | "boba"
+  | "zoomies"
+  | "patrol"
+  | "chase"
+  | "stretch"
+  | "sniff"
+  | "volleyball"
+  | "bone"
+  | "read"
+  | "ball"
+  | "music"
+  | "dance";
+
+export type ActivityArt = Partial<Record<IdleActivity, BeanAsset>>;
+
 export interface BeanManifest {
   version: string;
   states: BeanAssetState;
   motions?: Partial<Record<BeanMotion, BeanAsset>>;
+  /** Sprite sheets for idle activities, such as sipping boba. */
+  activities?: ActivityArt;
 }
 
 export const claudeEventSchema = z.object({

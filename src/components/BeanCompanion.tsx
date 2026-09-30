@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
-import { BeanAsset, BeanMotion, BeanState } from "../types";
+import { ActivityArt, BeanAsset, BeanMotion, BeanState } from "../types";
 import {
-  ACTIVITY_DURATIONS_MS,
   ACTIVITY_LABELS,
+  ActivityFrequency,
   activitiesFor,
+  activityDurationMs,
+  availableActivities,
   IdleActivity,
   isWaitingState,
   motionFor,
   nextActivity,
+  restDelayMs,
 } from "../activity";
 import BeanSprite from "./BeanSprite";
 
@@ -17,6 +20,12 @@ interface BeanCompanionProps {
   /** Bean without props, used while she runs somewhere without a run sheet. */
   restAsset?: BeanAsset;
   motions?: Partial<Record<BeanMotion, BeanAsset>>;
+  /** Sprite sheets for idle activities, such as sipping boba. */
+  activities?: ActivityArt;
+  /** Activities switched off in Settings. */
+  disabledActivities?: string[];
+  activityFrequency?: ActivityFrequency;
+  showBubble?: boolean;
   statusText: string;
   source: string;
   session: string | null;
@@ -72,6 +81,10 @@ export default function BeanCompanion({
   asset,
   restAsset = asset,
   motions = {},
+  activities = {},
+  disabledActivities = [],
+  activityFrequency = "normal",
+  showBubble = true,
   statusText,
   source,
   session,
@@ -117,6 +130,15 @@ export default function BeanCompanion({
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+  // Settings are read the same way so changing them never resets the timer.
+  const activityOptions = {
+    available: availableActivities(activities),
+    disabled: disabledActivities,
+  };
+  const optionsRef = useRef({ activityOptions, activities, activityFrequency });
+  useEffect(() => {
+    optionsRef.current = { activityOptions, activities, activityFrequency };
+  });
 
   useEffect(() => {
     if (!isWaiting) {
@@ -126,14 +148,22 @@ export default function BeanCompanion({
 
     // Alternate calm breathing with one short activity at a time.
     const resting = idleActivity === "breathe";
+    const options = optionsRef.current;
     const timeoutId = window.setTimeout(
       () =>
         setIdleActivity(
-          resting ? nextActivity(stateRef.current, "breathe") : "breathe",
+          resting
+            ? nextActivity(
+                stateRef.current,
+                "breathe",
+                Math.random,
+                optionsRef.current.activityOptions,
+              )
+            : "breathe",
         ),
       resting
-        ? 6_500 + Math.floor(Math.random() * 4_500)
-        : ACTIVITY_DURATIONS_MS[idleActivity],
+        ? restDelayMs(options.activityFrequency)
+        : activityDurationMs(idleActivity, options.activities[idleActivity]),
     );
     return () => window.clearTimeout(timeoutId);
   }, [isWaiting, idleActivity]);
@@ -141,12 +171,18 @@ export default function BeanCompanion({
   // A drowsy Bean drops zoomies at once instead of finishing them.
   const activity: IdleActivity | "arrive" = isArriving
     ? "arrive"
-    : isWaiting && activitiesFor(state).includes(idleActivity)
+    : isWaiting && activitiesFor(state, activityOptions).includes(idleActivity)
       ? idleActivity
       : "breathe";
   const motion = motionFor(activity);
+  const activitySheet =
+    activity !== "arrive" && activity !== "breathe" && !motion
+      ? activities[activity]
+      : undefined;
   const art =
-    (motion && motions[motion]) || (activity === "arrive" ? restAsset : asset);
+    (motion && motions[motion]) ||
+    activitySheet ||
+    (activity === "arrive" ? restAsset : asset);
   const facesRight = typeof art !== "string" && art.facing === "right";
   const activityLabel =
     activity === "arrive"
@@ -163,10 +199,12 @@ export default function BeanCompanion({
 
   return (
     <section className="companion-area">
-      <div className={`activity-bubble activity-${state}`} aria-live="polite">
-        <strong>{bubble.title}</strong>
-        <span>{bubble.detail}</span>
-      </div>
+      {showBubble && (
+        <div className={`activity-bubble activity-${state}`} aria-live="polite">
+          <strong>{bubble.title}</strong>
+          <span>{bubble.detail}</span>
+        </div>
+      )}
       <button
         type="button"
         data-tauri-drag-region
@@ -181,7 +219,8 @@ export default function BeanCompanion({
         aria-label={`Drag Bean — ${activityLabel}`}
       >
         <div
-          className={`bean-stage idle-activity-${activity}${motion ? " is-moving" : ""}`}
+          className={`bean-stage idle-activity-${activitySheet ? "sheet" : activity}${motion ? " is-moving" : ""}`}
+          data-activity={activity}
           aria-hidden="true"
         >
           <div className={`bean-facing${facesRight ? " faces-right" : ""}`}>
@@ -194,7 +233,7 @@ export default function BeanCompanion({
               </span>
             )}
           </div>
-          {activity === "boba" && (
+          {activity === "boba" && !activitySheet && (
             <span className="boba-cup">
               <i />
               <b />
@@ -203,7 +242,9 @@ export default function BeanCompanion({
               <em />
             </span>
           )}
-          {activity === "chase" && <span className="chase-swirl" />}
+          {activity === "chase" && !activitySheet && (
+            <span className="chase-swirl" />
+          )}
           {state === "thinking" && !isArriving && (
             <span className="typing-pixels">
               <i />

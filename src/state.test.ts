@@ -4,6 +4,7 @@ import {
   nextStateFromEvent,
   initialState,
   reducer,
+  sanitizePrefs,
 } from "./state";
 
 describe("Bean state reducer", () => {
@@ -372,5 +373,90 @@ describe("persisted controls and event ordering", () => {
     expect(
       reducer(initialState, { type: "loadPrefs", prefs: null }).preferences,
     ).toEqual(initialState.preferences);
+  });
+
+  it("applies settings patches and ignores Bean's own bookkeeping", () => {
+    const next = reducer(initialState, {
+      type: "patchPrefs",
+      patch: {
+        beanSize: "large",
+        soundEnabled: true,
+        disabledActivities: ["boba"],
+        // Not a setting: Settings must not be able to change this.
+        lastEventKey: "forged",
+      } as never,
+    });
+    expect(next.preferences.beanSize).toBe("large");
+    expect(next.preferences.disabledActivities).toEqual(["boba"]);
+    expect(next.muted).toBe(false);
+    expect(next.preferences.lastEventKey).toBeNull();
+  });
+
+  it("pauses through a settings patch like the Pause button", () => {
+    const paused = reducer(initialState, {
+      type: "patchPrefs",
+      patch: { paused: true },
+    });
+    expect(paused.paused).toBe(true);
+    expect(paused.statusText).toBe("Bean is paused");
+  });
+
+  it("resets settings but keeps Bean connected", () => {
+    const changed = reducer(
+      reducer(initialState, { type: "setWelcomeShown" }),
+      {
+        type: "patchPrefs",
+        patch: { beanSize: "small", soundVolume: 10, showBubble: false },
+      },
+    );
+    const reset = reducer(changed, { type: "resetSettings" });
+    expect(reset.preferences.beanSize).toBe("medium");
+    expect(reset.preferences.soundVolume).toBe(60);
+    expect(reset.preferences.showBubble).toBe(true);
+    expect(reset.preferences.welcomeShown).toBe(true);
+  });
+
+  it("rejects damaged settings from storage", () => {
+    const prefs = sanitizePrefs({
+      beanSize: "huge",
+      activityFrequency: 3,
+      soundVolume: 400,
+      disabledActivities: "boba",
+      alwaysOnTop: "yes",
+    });
+    expect(prefs.beanSize).toBe("medium");
+    expect(prefs.activityFrequency).toBe("normal");
+    expect(prefs.soundVolume).toBe(100);
+    expect(prefs.disabledActivities).toEqual([]);
+    expect(prefs.alwaysOnTop).toBe(true);
+  });
+
+  it("stays calm when reactions are switched off", () => {
+    const quiet = reducer(initialState, {
+      type: "patchPrefs",
+      patch: { celebrateCompletions: false, alertOnAttention: false },
+    });
+    const done = nextStateFromEvent(
+      {
+        source: "chat",
+        session: "s1",
+        status: "completed",
+        timestamp: "2026-09-30T00:00:01Z",
+      },
+      quiet,
+    );
+    expect(done.beanState).toBe("idle");
+    // The completion is still recorded so it is not replayed later.
+    expect(done.preferences.lastCompletedAt).toBe("2026-09-30T00:00:01Z");
+    const needs = nextStateFromEvent(
+      {
+        source: "chat",
+        session: "s1",
+        status: "attention_needed",
+        timestamp: "2026-09-30T00:00:02Z",
+      },
+      done,
+    );
+    expect(needs.beanState).toBe("idle");
   });
 });
