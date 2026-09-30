@@ -1,12 +1,54 @@
 {
-  "version": "1.1",
+  "version": "2.0",
   "states": {
-    "idle": "/bean/generated/idle.png",
-    "noticed": "/bean/generated/idle.png",
-    "thinking": "/bean/generated/working.png",
+    "idle": {
+      "src": "/bean/sprites/idle.png",
+      "frames": 24,
+      "fps": 10,
+      "columns": 6
+    },
+    "noticed": {
+      "src": "/bean/sprites/noticed.png",
+      "frames": 24,
+      "fps": 12,
+      "columns": 6
+    },
+    "thinking": {
+      "src": "/bean/sprites/thinking.png",
+      "frames": 24,
+      "fps": 10,
+      "columns": 6
+    },
     "message": "/bean/generated/idle.png",
-    "happy": "/bean/generated/idle.png",
-    "sleepy": "/bean/generated/idle.png",
+    "happy": {
+      "src": "/bean/sprites/happy.png",
+      "frames": 24,
+      "fps": 12,
+      "columns": 6,
+      "loop": false
+    },
+    "sleepy": {
+      "src": "/bean/sprites/sleepy.png",
+      "frames": 24,
+      "fps": 10,
+      "columns": 6
+    },
     "soundOff": "/bean/generated/idle.png"
+  },
+  "motions": {
+    "run": {
+      "src": "/bean/sprites/run.png",
+      "frames": 24,
+      "fps": 12,
+      "columns": 6,
+      "facing": "left"
+    },
+    "walk": {
+      "src": "/bean/sprites/walk.png",
+      "frames": 24,
+      "fps": 10,
+      "columns": 6,
+      "facing": "left"
+    }
   }
 }

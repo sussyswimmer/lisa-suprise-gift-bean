@@ -37,6 +37,8 @@ Use these prompts with the approved Bean reference photos. Keep the character **
 
 Bean plays sprite sheets frame by frame, so real running, walking, and jumping come from Higgsfield's **AutoSprite** model (`autosprite`). Use `public/bean/generated/idle.png` as the single `image` input (or `working.png` for the typing loop) so every sheet keeps Bean's face, curls, and palette. Set `is_humanoid: false`, `frame_size: 256`, `remove_bg: default`, and `video_tier: turbo` (use `pro` if the legs smear).
 
+> The sheets in `public/bean/sprites/` were not made with AutoSprite: through the Higgsfield MCP tools it rejects every job (`Job set type not supported: autosprite`). They are 3-second Kling 3.0 / Wan 2.7 clips of Bean on a flat #00FF00 background, using the same image as start and end frame so each loops, then chroma-keyed and sliced into 24-frame, 6-column sheets of 256 px cells.
+
 | Bean slot | AutoSprite `kind` | `frame_count` | Custom prompt (only for `kind: custom`) |
 | --- | --- | --- | --- |
 | `run` motion — zoomies and running to the laptop | `run` | 12 | — |
