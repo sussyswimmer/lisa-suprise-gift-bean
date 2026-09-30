@@ -23,7 +23,7 @@ for (let i = 0; i < rest.length; i += 2) {
   options[rest[i].slice(2)] = rest[i + 1];
 }
 if (![...states, ...motions].includes(target) || !source)
-  throw new Error(`Usage: npm run add:sprite -- <${[...states, ...motions].join("|")}> <sheet.png> [--fps 12] [--frames n] [--columns n] [--frame-size 256] [--facing left|right] [--loop false]`);
+  throw new Error(`Usage: npm run add:sprite -- <${[...states, ...motions].join("|")}> <sheet.png> [--fps 12] [--frames n] [--columns n] [--frame-size 256] [--facing left|right] [--loop false] [--scale 1.4]`);
 
 const png = readFileSync(source);
 if (png.toString("ascii", 1, 4) !== "PNG") throw new Error(`${source} is not a PNG file`);
@@ -47,6 +47,7 @@ const sprite = { src: `/bean/sprites/${fileName}`, frames, fps };
 if (columns !== frames) sprite.columns = columns;
 if (options.facing) sprite.facing = options.facing;
 if (options.loop === "false") sprite.loop = false;
+if (options.scale) sprite.scale = Number(options.scale);
 
 const manifestPath = join(root, "public/bean/manifest.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));

@@ -211,6 +211,8 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 .bean-thinking { animation: typing .9s steps(2, end) infinite; }
 .bean-message { animation: message 1.3s var(--ease) 1; }
 .bean-happy { animation: happy-jump 1.15s var(--ease) both, happy-wiggle 1.4s ease-in-out 1.2s infinite; }
+/* A jump sheet already jumps; only add the wiggle once it has landed. */
+.bean-happy.has-sprite { animation: happy-wiggle 1.4s ease-in-out 2.1s infinite; }
 .bean-noticed { animation: noticed .5s steps(3, end) 2; }
 .bean-soundOff { filter: grayscale(.6); }
 .bean-sleepy { animation: sleepy-breathe 3.2s var(--ease) infinite; }

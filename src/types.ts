@@ -36,6 +36,11 @@ export interface SpriteAsset {
   loop?: boolean;
   /** The way Bean looks in the art, so motion can flip her the right way. */
   facing?: "left" | "right";
+  /**
+   * Draws the sheet larger than Bean's usual 128 px box, anchored at her feet,
+   * for sheets where she is drawn small to leave room for a jump.
+   */
+  scale?: number;
 }
 
 /** A still image path or an animated sprite sheet. */

@@ -6,6 +6,8 @@ interface BeanSpriteProps {
   className?: string;
 }
 
+const BEAN_BOX_PX = 128;
+
 function prefersReducedMotion() {
   return (
     typeof window !== "undefined" &&
@@ -46,6 +48,7 @@ function SpriteSheet({
     return () => window.clearInterval(intervalId);
   }, [sprite]);
 
+  const size = BEAN_BOX_PX * (sprite.scale ?? 1);
   return (
     <div
       className={`${className} is-sprite`}
@@ -53,6 +56,15 @@ function SpriteSheet({
       style={{
         backgroundImage: `url("${sprite.src}")`,
         ...spriteFramePosition(sprite, frame),
+        ...(sprite.scale && sprite.scale !== 1
+          ? {
+              position: "absolute",
+              bottom: 0,
+              left: `calc(50% - ${size / 2}px)`,
+              width: size,
+              height: size,
+            }
+          : {}),
       }}
     />
   );

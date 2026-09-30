@@ -158,7 +158,7 @@ export default function BeanCompanion({
       <button
         type="button"
         data-tauri-drag-region
-        className={`bean-shell bean-${state}`}
+        className={`bean-shell bean-${state}${typeof art === "string" ? "" : " has-sprite"}`}
         onMouseDown={startNativeDrag}
         onPointerDown={(event) => {
           if (event.pointerType === "touch") void onDragStart();

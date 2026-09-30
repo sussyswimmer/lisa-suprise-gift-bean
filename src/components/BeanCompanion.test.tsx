@@ -66,6 +66,36 @@ describe("Bean animations", () => {
     vi.restoreAllMocks();
   });
 
+  it("draws a scaled jump sheet larger, anchored at Bean's feet", () => {
+    const view = render(
+      <BeanCompanion
+        state="happy"
+        asset={{
+          src: "/bean/sprites/happy.png",
+          frames: 24,
+          fps: 12,
+          columns: 6,
+          loop: false,
+          scale: 1.5,
+        }}
+        statusText="Done"
+        source="chat"
+        session={null}
+        preview={null}
+        onDragStart={() => undefined}
+      />,
+    );
+    const sprite = view.container.querySelector<HTMLElement>(".is-sprite")!;
+    expect(sprite.style.width).toBe("192px");
+    expect(sprite.style.bottom).toBe("0px");
+    expect(sprite.style.left).toBe("calc(50% - 96px)");
+    expect(view.container.querySelector(".bean-shell")?.className).toContain(
+      "has-sprite",
+    );
+    act(() => vi.advanceTimersByTime(5_000));
+    expect(sprite.dataset.frame).toBe("23");
+  });
+
   it("steps through horizontal and grid sprite sheets", () => {
     expect(spriteFramePosition(run, 0)).toEqual({
       backgroundSize: "800% 100%",

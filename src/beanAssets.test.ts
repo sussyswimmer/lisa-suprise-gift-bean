@@ -28,7 +28,12 @@ describe("external data validation", () => {
       ...DEFAULT_ASSET_PACK,
       states: {
         ...DEFAULT_ASSET_PACK.states,
-        happy: { src: "/bean/sprites/jump.png", frames: 12, fps: 14 },
+        happy: {
+          src: "/bean/sprites/jump.png",
+          frames: 12,
+          fps: 14,
+          scale: 1.4,
+        },
       },
       motions: {
         run: { src: "/bean/sprites/run.png", frames: 8, fps: 12, columns: 4 },

@@ -25,7 +25,8 @@
       "frames": 24,
       "fps": 12,
       "columns": 6,
-      "loop": false
+      "loop": false,
+      "scale": 1.45
     },
     "sleepy": {
       "src": "/bean/sprites/sleepy.png",

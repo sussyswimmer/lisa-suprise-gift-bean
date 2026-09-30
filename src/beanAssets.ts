@@ -21,6 +21,7 @@ const spriteSchema = z.object({
   columns: z.number().int().min(1).max(256).optional(),
   loop: z.boolean().optional(),
   facing: z.enum(["left", "right"]).optional(),
+  scale: z.number().min(0.5).max(2.5).optional(),
 });
 const assetSchema = z.union([z.string().min(1), spriteSchema]);
 const manifestSchema = z.object({
