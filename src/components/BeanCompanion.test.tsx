@@ -96,6 +96,22 @@ describe("Bean animations", () => {
     expect(sprite.dataset.frame).toBe("23");
   });
 
+  it("ends an activity on time even while Claude flickers between states", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.45);
+    const view = render(companion("idle"));
+    const stage = () => view.container.querySelector(".bean-stage")!.className;
+    act(() => vi.advanceTimersByTime(8_600));
+    expect(stage()).toContain("idle-activity-zoomies");
+    view.rerender(companion("sleepy"));
+    expect(stage()).toContain("idle-activity-breathe");
+    for (let i = 0; i < 4; i++) {
+      view.rerender(companion(i % 2 ? "sleepy" : "idle"));
+      act(() => vi.advanceTimersByTime(1_000));
+    }
+    expect(stage()).toContain("idle-activity-breathe");
+    vi.restoreAllMocks();
+  });
+
   it("steps through horizontal and grid sprite sheets", () => {
     expect(spriteFramePosition(run, 0)).toEqual({
       backgroundSize: "800% 100%",
@@ -106,6 +122,12 @@ describe("Bean animations", () => {
     expect(spriteFramePosition(grid, 4)).toEqual({
       backgroundSize: "300% 200%",
       backgroundPosition: "50% 100%",
+    });
+    // 12 frames in a 4×4 grid: the empty last row still takes up space.
+    const padded = { ...run, frames: 12, columns: 4, rows: 4 };
+    expect(spriteFramePosition(padded, 11)).toEqual({
+      backgroundSize: "400% 400%",
+      backgroundPosition: "100% 66.66666666666666%",
     });
   });
 });

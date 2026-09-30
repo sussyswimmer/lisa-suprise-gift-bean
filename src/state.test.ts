@@ -212,6 +212,44 @@ describe("completion celebration", () => {
     });
     expect(later.beanState).toBe("idle");
   });
+  it("lets another session's ongoing work wait for the celebration", () => {
+    const happy = reducer(initialState, {
+      type: "claudeEvent",
+      event: completed,
+    });
+    const other = reducer(happy, {
+      type: "claudeEvent",
+      event: {
+        source: "claude_code",
+        session: "code-1",
+        status: "working",
+        timestamp: "2026-09-30T00:00:01Z",
+      },
+    });
+    expect(other.beanState).toBe("happy");
+  });
+  it("remembers why monitoring is unavailable until Claude is back", () => {
+    const denied = reducer(initialState, {
+      type: "claudeEvent",
+      event: {
+        source: "system",
+        session: null,
+        status: "unavailable",
+        reason: "permission_denied",
+        timestamp: "2026-09-30T00:00:00Z",
+      },
+    });
+    expect(denied.unavailableReason).toBe("permission_denied");
+    const back = reducer(denied, {
+      type: "claudeEvent",
+      event: {
+        ...completed,
+        status: "idle",
+        timestamp: "2026-09-30T00:00:01Z",
+      },
+    });
+    expect(back.unavailableReason).toBeNull();
+  });
   it("still lets new work or attention interrupt the celebration", () => {
     const happy = reducer(initialState, {
       type: "claudeEvent",

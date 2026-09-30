@@ -20,6 +20,8 @@ export interface CompanionState {
   muted: boolean;
   paused: boolean;
   unavailable: boolean;
+  /** Why monitoring is unavailable, e.g. "permission_denied". */
+  unavailableReason: string | null;
   preferences: BeanPrefs;
   lastStatusTs: string | null;
   preview: string | null;
@@ -45,6 +47,7 @@ export const initialState: CompanionState = {
   muted: true,
   paused: false,
   unavailable: false,
+  unavailableReason: null,
   preferences: defaultPrefs,
   lastStatusTs: null,
   preview: null,
@@ -62,7 +65,7 @@ type Action =
     }
   | { type: "setPaused"; paused: boolean }
   | { type: "setShowContent"; value: boolean }
-  | { type: "setUnavailable"; unavailable: boolean }
+  | { type: "setUnavailable"; unavailable: boolean; reason?: string }
   | { type: "setCurrentNote"; value: string }
   | { type: "setManualMessage"; value: string }
   | { type: "setSound"; soundEnabled: boolean }
@@ -105,6 +108,7 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
         return {
           ...state,
           unavailable: false,
+          unavailableReason: null,
           beanState: state.unavailable ? "idle" : state.beanState,
           statusText: state.unavailable
             ? "Waiting and watching"
@@ -114,6 +118,7 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
       return {
         ...state,
         unavailable: true,
+        unavailableReason: action.reason ?? null,
         beanState: "sleepy",
         statusText: "Accessibility not available yet — waiting for permission",
       };
@@ -167,6 +172,7 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
         statusText: "No active session",
         preview: null,
         unavailable: false,
+        unavailableReason: null,
         lastStatusTs: null,
       };
     default:
@@ -247,10 +253,15 @@ export function nextStateFromEvent(
   )
     return now;
   // Claude reports idle again within a second of finishing; let Bean finish
-  // celebrating so the completion is actually noticeable.
+  // celebrating so the completion is actually noticeable. Work that another
+  // session was already doing waits too; new work in the finished one does not.
   if (
     now.beanState === "happy" &&
-    (status === "idle" || status === "reply" || status === "message") &&
+    (status === "idle" ||
+      status === "reply" ||
+      status === "message" ||
+      (status === "working" &&
+        (event.source !== now.source || event.session !== now.session))) &&
     Date.parse(event.timestamp) - Date.parse(now.preferences.lastCompletedAt) <
       CELEBRATION_HOLD_MS
   )
@@ -265,7 +276,11 @@ export function nextStateFromEvent(
           : null
         : event.preview
       : null;
-  now = { ...now, preview };
+  now = {
+    ...now,
+    preview,
+    unavailableReason: status === "unavailable" ? (event.reason ?? null) : null,
+  };
 
   if (status === "unavailable") {
     return {

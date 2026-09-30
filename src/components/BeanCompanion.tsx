@@ -1,8 +1,9 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { BeanAsset, BeanMotion, BeanState } from "../types";
 import {
   ACTIVITY_DURATIONS_MS,
   ACTIVITY_LABELS,
+  activitiesFor,
   IdleActivity,
   isWaitingState,
   motionFor,
@@ -109,6 +110,14 @@ export default function BeanCompanion({
     return () => window.clearTimeout(timeoutId);
   }, [arrival]);
 
+  // Read the latest state inside the timer without restarting it: Claude can
+  // flicker between idle and unavailable every second, which kept resetting
+  // the countdown so an activity never ended.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
   useEffect(() => {
     if (!isWaiting) {
       setIdleActivity("breathe");
@@ -119,17 +128,20 @@ export default function BeanCompanion({
     const resting = idleActivity === "breathe";
     const timeoutId = window.setTimeout(
       () =>
-        setIdleActivity(resting ? nextActivity(state, "breathe") : "breathe"),
+        setIdleActivity(
+          resting ? nextActivity(stateRef.current, "breathe") : "breathe",
+        ),
       resting
         ? 6_500 + Math.floor(Math.random() * 4_500)
         : ACTIVITY_DURATIONS_MS[idleActivity],
     );
     return () => window.clearTimeout(timeoutId);
-  }, [isWaiting, idleActivity, state]);
+  }, [isWaiting, idleActivity]);
 
+  // A drowsy Bean drops zoomies at once instead of finishing them.
   const activity: IdleActivity | "arrive" = isArriving
     ? "arrive"
-    : isWaiting
+    : isWaiting && activitiesFor(state).includes(idleActivity)
       ? idleActivity
       : "breathe";
   const motion = motionFor(activity);

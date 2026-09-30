@@ -17,8 +17,9 @@ function prefersReducedMotion() {
 }
 
 export function spriteFramePosition(sprite: SpriteAsset, frame: number) {
-  const columns = Math.min(sprite.columns ?? sprite.frames, sprite.frames);
-  const rows = Math.ceil(sprite.frames / columns);
+  // Use the sheet's real grid: trailing empty cells still take up space.
+  const columns = sprite.columns ?? sprite.frames;
+  const rows = sprite.rows ?? Math.ceil(sprite.frames / columns);
   const column = frame % columns;
   const row = Math.floor(frame / columns);
   return {

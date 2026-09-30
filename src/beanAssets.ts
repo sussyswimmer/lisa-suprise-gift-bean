@@ -19,6 +19,7 @@ const spriteSchema = z.object({
   frames: z.number().int().min(1).max(256),
   fps: z.number().positive().max(60),
   columns: z.number().int().min(1).max(256).optional(),
+  rows: z.number().int().min(1).max(256).optional(),
   loop: z.boolean().optional(),
   facing: z.enum(["left", "right"]).optional(),
   scale: z.number().min(0.5).max(2.5).optional(),

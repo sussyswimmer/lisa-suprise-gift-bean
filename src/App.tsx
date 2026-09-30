@@ -327,7 +327,11 @@ export default function App() {
     try {
       const granted = await invoke<boolean>("request_accessibility_permission");
       if (!granted) {
-        dispatch({ type: "setUnavailable", unavailable: true });
+        dispatch({
+          type: "setUnavailable",
+          unavailable: true,
+          reason: "permission_denied",
+        });
         setAccessMessage(
           "Turn on Bean in System Settings → Accessibility, then check again.",
         );
@@ -437,6 +441,10 @@ export default function App() {
           <ControlPanel
             open={settingsOpen}
             unavailable={state.unavailable}
+            permissionDenied={
+              state.unavailableReason === "permission_denied" ||
+              permissionBlocked
+            }
             paused={state.paused}
             soundEnabled={state.preferences.soundEnabled}
             showContent={showContent}

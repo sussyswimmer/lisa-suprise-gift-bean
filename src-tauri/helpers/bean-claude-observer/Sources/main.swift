@@ -18,6 +18,7 @@ struct SessionTracker {
   var inconclusivePolls = 0
   var composerFingerprint: Int?
   var lastComposerChange: Date?
+  var lastSource: String?
 }
 
 struct DesktopObservation {
@@ -38,10 +39,16 @@ let supportedApps = [
 var trackers = [String: SessionTracker]()
 var claudeCodeEventOffset: UInt64 = 0
 var claudeCodeHooksAvailable = false
-// Claude Code sessions that are working or waiting on the user, keyed by their
-// last hook event. Interrupting Claude Code with Esc fires no Stop hook, so
-// entries expire instead of hiding Claude Desktop activity forever.
-var claudeCodeActiveSessions = [String: Date]()
+struct ClaudeCodeSession {
+  var lastEvent: Date
+  var status: String
+}
+
+// Claude Code sessions that are working or waiting on the user. Interrupting
+// Claude Code with Esc fires no Stop hook, so entries expire instead of hiding
+// Claude Desktop activity forever.
+var claudeCodeActiveSessions = [String: ClaudeCodeSession]()
+var lastEmitted: (source: String, session: String?, status: String)?
 let claudeCodeSessionTimeout: TimeInterval = 30 * 60
 var lastClaudeCodeEventAt: Date?
 var claudeCodeEventsURL = FileManager.default.homeDirectoryForCurrentUser
@@ -60,6 +67,7 @@ func emit(_ source: String, _ session: String?, _ status: String, _ preview: Str
   }
   print(line)
   fflush(stdout)
+  lastEmitted = (source, session, status)
 }
 
 func emit(_ observation: DesktopObservation) {
@@ -124,35 +132,30 @@ let controlRoles: Set<String> = [
   "AXButton", "AXCheckBox", "AXRadioButton", "AXMenuItem", "AXTab", "AXProgressIndicator", "AXPopUpButton", "AXMenuButton",
 ]
 
-func isSendLabel(_ label: String) -> Bool {
-  label == "send" || label.hasPrefix("send ") || ["submit message", "start task"].contains(label)
-}
+// Labels are matched exactly: buttons named from their contents, such as a chat
+// titled "Stop words in NLP", must not pin Bean to a state.
+let sendLabels: Set<String> = ["send", "send message", "send prompt", "submit message", "start task"]
+// Dictation and sharing controls also say "Stop"; they are not Claude replying.
+let stopLabels: Set<String> = [
+  "stop", "stop response", "stop generating", "stop responding", "stop streaming", "stop task", "interrupt",
+  "cancel response", "cancel generation", "cancel task",
+]
+let attentionLabels: Set<String> = [
+  "approve", "allow", "deny", "always allow", "allow always", "allow once", "allow for this chat",
+  "allow for this conversation", "allow for this task", "allow for this session", "needs attention",
+  "attention required", "review required", "requires approval", "needs your approval", "waiting for approval",
+  "permission required",
+]
+let failureLabels: Set<String> = [
+  "generation failed", "response failed", "something went wrong", "error occurred", "message failed", "failed to send",
+]
+let stoppedLabels: Set<String> = ["generation stopped", "response stopped", "response was interrupted", "response interrupted"]
 
-func isStopLabel(_ label: String) -> Bool {
-  // Dictation and sharing controls also say "Stop"; they are not Claude replying.
-  guard !["record", "dictat", "voice", "listen", "shar", "audio"].contains(where: { label.contains($0) }) else {
-    return false
-  }
-  return label == "stop" || label.hasPrefix("stop ") || label == "interrupt"
-    || ["cancel response", "cancel generation", "cancel task", "generating response"].contains(where: { label.hasPrefix($0) })
-}
-
-func isAttentionLabel(_ label: String) -> Bool {
-  ["approve", "allow", "deny", "always allow", "allow always"].contains(label)
-    || label.hasPrefix("approve ")
-    || ["allow once", "allow for this", "needs attention", "attention required", "review required", "requires approval",
-        "needs your approval", "waiting for approval", "permission required"].contains(where: { label.contains($0) })
-}
-
-func isFailureLabel(_ label: String) -> Bool {
-  ["generation failed", "response failed", "something went wrong", "error occurred", "message failed", "failed to send"]
-    .contains(where: { label.contains($0) })
-}
-
-func isStoppedLabel(_ label: String) -> Bool {
-  ["generation stopped", "response stopped", "response was interrupted", "response interrupted"]
-    .contains(where: { label.contains($0) })
-}
+func isSendLabel(_ label: String) -> Bool { sendLabels.contains(label) }
+func isStopLabel(_ label: String) -> Bool { stopLabels.contains(label) }
+func isAttentionLabel(_ label: String) -> Bool { attentionLabels.contains(label) }
+func isFailureLabel(_ label: String) -> Bool { failureLabels.contains(label) }
+func isStoppedLabel(_ label: String) -> Bool { stoppedLabels.contains(label) }
 
 struct NodeInfo {
   var role: String
@@ -306,8 +309,9 @@ func sessionFrom(title: String?) -> String? {
 // Returns nil when the scan never reached the composer, so a partial read
 // cannot be mistaken for Claude finishing its reply.
 func directStatus(from snapshot: InterfaceSnapshot) -> String? {
-  if snapshot.hasStopControl { return "working" }
+  // Claude keeps its Stop button while a permission prompt waits on the user.
   if snapshot.labels.contains(where: isAttentionLabel) { return "attention_needed" }
+  if snapshot.hasStopControl { return "working" }
   if snapshot.labels.contains(where: isFailureLabel) { return "failed" }
   if snapshot.labels.contains(where: isStoppedLabel) { return "stopped" }
   return snapshot.hasSendControl ? "idle" : nil
@@ -359,7 +363,8 @@ func transitionStatus(_ observed: String?, trackerKey: String) -> String {
     // completion that was never seen.
     tracker.inconclusivePolls += 1
     if tracker.inconclusivePolls >= 6 {
-      tracker = SessionTracker(composerFingerprint: tracker.composerFingerprint, lastComposerChange: tracker.lastComposerChange)
+      tracker = SessionTracker(composerFingerprint: tracker.composerFingerprint, lastComposerChange: tracker.lastComposerChange,
+                               lastSource: tracker.lastSource)
       return "idle"
     }
     return "working"
@@ -396,10 +401,44 @@ func resetTracker(_ key: String) {
 }
 
 func pruneClaudeCodeSessions(at date: Date = Date()) {
-  for (session, lastEvent) in claudeCodeActiveSessions where date.timeIntervalSince(lastEvent) >= claudeCodeSessionTimeout {
+  for (session, active) in claudeCodeActiveSessions where date.timeIntervalSince(active.lastEvent) >= claudeCodeSessionTimeout {
     claudeCodeActiveSessions.removeValue(forKey: session)
     emit("claude_code", session == "unknown" ? nil : session, "idle")
   }
+}
+
+// A session waiting on the user outranks every session that is only working.
+func claudeCodePriority() -> (session: String, status: String)? {
+  let waiting = claudeCodeActiveSessions.filter { $0.value.status == "attention_needed" }
+  let pool = waiting.isEmpty ? claudeCodeActiveSessions : waiting
+  guard let latest = pool.max(by: { $0.value.lastEvent < $1.value.lastEvent }) else { return nil }
+  return (latest.key, latest.value.status)
+}
+
+// Applies one Claude Code hook event and says whether Bean should show it.
+func recordClaudeCodeEvent(session: String, status: String, at date: Date = Date()) -> String? {
+  switch status {
+  case "working", "attention_needed":
+    claudeCodeActiveSessions[session] = ClaudeCodeSession(lastEvent: date, status: status)
+  case "heartbeat":
+    // A finished tool call keeps a long turn alive. It is only shown when it
+    // means the user just answered this session's permission prompt.
+    guard var active = claudeCodeActiveSessions[session] else { return nil }
+    let answered = active.status == "attention_needed"
+    active.lastEvent = date
+    active.status = "working"
+    claudeCodeActiveSessions[session] = active
+    if !answered { return nil }
+  case "reply":
+    // A late streamed-text hook must not revive a turn that already stopped.
+    claudeCodeActiveSessions[session]?.lastEvent = date
+  default:
+    claudeCodeActiveSessions.removeValue(forKey: session)
+  }
+  let shown = status == "heartbeat" ? "working" : status
+  let otherSessionWaiting = claudeCodeActiveSessions.contains { $0.key != session && $0.value.status == "attention_needed" }
+  if otherSessionWaiting && ["working", "reply"].contains(shown) { return nil }
+  return shown
 }
 
 func pollClaudeCodeHooks() -> Bool {
@@ -426,18 +465,10 @@ func pollClaudeCodeHooks() -> Bool {
   guard let raw = String(data: data, encoding: .utf8) else { return true }
   for line in raw.split(whereSeparator: { $0.isNewline }).map(String.init) {
     if let eventData = line.data(using: .utf8), let event = try? JSONDecoder().decode(ClaudeEvent.self, from: eventData) {
-      let session = event.session ?? "unknown"
-      switch event.status {
-      case "working", "attention_needed":
-        claudeCodeActiveSessions[session] = Date()
-      case "reply":
-        // A late streamed-text hook must not revive a turn that already stopped.
-        if claudeCodeActiveSessions[session] != nil { claudeCodeActiveSessions[session] = Date() }
-      default:
-        claudeCodeActiveSessions.removeValue(forKey: session)
-      }
       lastClaudeCodeEventAt = Date()
-      emit(event.source, event.session, event.status, event.preview)
+      if let shown = recordClaudeCodeEvent(session: event.session ?? "unknown", status: event.status) {
+        emit(event.source, event.session, shown, event.preview)
+      }
     } else if ["working", "completed", "reply", "failed", "attention_needed", "stopped"].contains(line) {
       emit("claude_code", nil, line)
     }
@@ -449,7 +480,9 @@ func pollClaudeCodeHooks() -> Bool {
 }
 
 func observeDesktop(bundleID: String) -> DesktopObservation? {
-  guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) else {
+  // Query each poll: NSWorkspace.runningApplications is a cached list that only
+  // refreshes while a run loop runs, so it can miss Claude launching or relaunching.
+  guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first(where: { !$0.isTerminated }) else {
     return nil
   }
 
@@ -496,8 +529,12 @@ func observeDesktop(bundleID: String) -> DesktopObservation? {
   let transitioned = transitionStatus(directStatus(from: reading.snapshot), trackerKey: trackerKey)
   let status = transitioned == "idle" && composerIsActive(in: appElement, trackerKey: trackerKey)
     ? "message" : transitioned
+  // The scan rarely reaches the Chat/Cowork switcher, so keep the last mode it saw.
+  let source = sourceFor(selectedLabels: reading.snapshot.selectedLabels,
+                         fallback: trackers[trackerKey]?.lastSource ?? defaultSource)
+  trackers[trackerKey, default: SessionTracker()].lastSource = source
   // Desktop monitoring remains status-only; previews are opt-in Code hooks.
-  return DesktopObservation(source: sourceFor(selectedLabels: reading.snapshot.selectedLabels, fallback: defaultSource),
+  return DesktopObservation(source: source,
                             session: sessionFrom(title: stringValue(reading.window, kAXTitleAttribute as CFString)),
                             status: status, reason: nil)
 }
@@ -588,6 +625,12 @@ if args.contains("--self-test") {
   precondition(directStatus(from: buttons(["stop response"])) == "working")
   precondition(directStatus(from: buttons(["stop recording", "send message"])) == "idle", "Dictation must not look like a reply")
   precondition(directStatus(from: buttons(["allow once", "send message"])) == "attention_needed")
+  precondition(directStatus(from: buttons(["stop response", "always allow", "allow once", "deny"])) == "attention_needed",
+               "A permission prompt during a reply must need attention")
+  precondition(directStatus(from: buttons(["stop words in nlp preprocessing", "send message"])) == "idle",
+               "A chat titled Stop… must not look like a reply")
+  precondition(directStatus(from: buttons(["approve q3 budget", "send message"])) == "idle",
+               "A chat titled Approve… must not need attention")
   precondition(directStatus(from: buttons(["new chat"])) == nil, "A scan without the composer must be inconclusive")
   precondition(sourceFor(selectedLabels: ["cowork"], fallback: "chat") == "cowork")
   precondition(sourceFor(selectedLabels: [], fallback: "chat") == "chat", "An unselected Cowork tab must not relabel Chat")
@@ -604,7 +647,7 @@ if args.contains("--self-test") {
   let prompt = ClaudeEvent(source: "claude_code", session: "test", status: "working", timestamp: now(), preview: nil, reason: nil)
   try (JSONEncoder().encode(prompt) + Data("\n".utf8)).write(to: claudeCodeEventsURL)
   precondition(pollClaudeCodeHooks(), "The first live queue must be read")
-  precondition(claudeCodeActiveSessions["test"] != nil, "The first prompt must not be discarded")
+  precondition(claudeCodeActiveSessions["test"]?.status == "working", "The first prompt must not be discarded")
   let stop = ClaudeEvent(source: "claude_code", session: "test", status: "completed", timestamp: now(), preview: nil, reason: nil)
   try (JSONEncoder().encode(stop) + Data("\n".utf8)).write(to: claudeCodeEventsURL)
   _ = pollClaudeCodeHooks()
@@ -613,9 +656,20 @@ if args.contains("--self-test") {
   try (JSONEncoder().encode(lateReply) + Data("\n".utf8)).write(to: claudeCodeEventsURL)
   _ = pollClaudeCodeHooks()
   precondition(claudeCodeActiveSessions.isEmpty, "A late reply hook must not revive a finished turn")
-  claudeCodeActiveSessions["interrupted"] = Date().addingTimeInterval(-claudeCodeSessionTimeout - 1)
+  claudeCodeActiveSessions["interrupted"] = ClaudeCodeSession(lastEvent: Date().addingTimeInterval(-claudeCodeSessionTimeout - 1),
+                                                              status: "working")
   pruneClaudeCodeSessions()
   precondition(claudeCodeActiveSessions.isEmpty, "An interrupted Claude Code turn must not block Desktop monitoring forever")
+  precondition(recordClaudeCodeEvent(session: "a", status: "working") == "working")
+  precondition(recordClaudeCodeEvent(session: "a", status: "heartbeat") == nil, "Tool results must not repeat working")
+  precondition(recordClaudeCodeEvent(session: "a", status: "attention_needed") == "attention_needed")
+  precondition(recordClaudeCodeEvent(session: "b", status: "working") == nil, "Other work must not hide a permission prompt")
+  precondition(claudeCodePriority()?.session == "a" && claudeCodePriority()?.status == "attention_needed")
+  precondition(recordClaudeCodeEvent(session: "a", status: "heartbeat") == "working", "Answering a prompt resumes work")
+  precondition(recordClaudeCodeEvent(session: "b", status: "completed") == "completed")
+  precondition(recordClaudeCodeEvent(session: "gone", status: "heartbeat") == nil && claudeCodeActiveSessions["gone"] == nil,
+               "A tool result after Stop must not revive a session")
+  claudeCodeActiveSessions.removeAll()
   precondition(hookStatus("attention_needed", input: Data(#"{"notification_type":"idle_prompt"}"#.utf8)) == "idle")
   precondition(hookStatus("attention_needed", input: Data(#"{"notification_type":"permission_prompt"}"#.utf8)) == "attention_needed")
   precondition(hookStatus("attention_needed", input: Data(#"{"notification_type":"auth_success"}"#.utf8)) == nil)
@@ -678,6 +732,15 @@ if let attributes = try? FileManager.default.attributesOfItem(atPath: existingEv
   claudeCodeEventOffset = size.uint64Value
 }
 
+// Keep the main run loop alive between polls. AppKit delivers workspace and
+// accessibility notifications through it, and run(until:) returns at once
+// when the loop has no sources.
+let runLoopKeepAlive = Timer(timeInterval: 3_600, repeats: true) { _ in }
+RunLoop.main.add(runLoopKeepAlive, forMode: .common)
+func waitForNextPoll(_ seconds: TimeInterval) {
+  RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+}
+
 while true {
   let hasClaudeCodeHooks = pollClaudeCodeHooks() || claudeCodeHooksAvailable
   pruneClaudeCodeSessions()
@@ -685,22 +748,34 @@ while true {
   // activity is still reported so Chat keeps syncing while Code is open.
   let claudeCodeHoldsStatus = !claudeCodeActiveSessions.isEmpty
     || (lastClaudeCodeEventAt.map { Date().timeIntervalSince($0) < 4 } ?? false)
+  let claudeCodeWaiting = claudeCodePriority()?.status == "attention_needed"
   guard isAccessibilityTrusted() else {
     if !claudeCodeHoldsStatus { emit("system", nil, "unavailable", reason: "permission_denied") }
-    Thread.sleep(forTimeInterval: 1.2)
+    waitForNextPoll(1.2)
     continue
   }
 
   var observedApp = false
+  var desktopShown = false
   for bundleID in supportedApps {
     guard let observation = observeDesktop(bundleID: bundleID) else { continue }
     observedApp = true
+    // A Claude Code permission prompt outranks everything but a Desktop one.
+    if claudeCodeWaiting && observation.status != "attention_needed" { continue }
     if claudeCodeHoldsStatus && ["idle", "unavailable"].contains(observation.status) { continue }
     emit(observation)
+    desktopShown = true
+  }
+  // Once Desktop goes quiet again, show the Claude Code state it covered up.
+  if !desktopShown, let priority = claudeCodePriority() {
+    let session = priority.session == "unknown" ? nil : priority.session
+    if lastEmitted?.source != "claude_code" || lastEmitted?.session != session || lastEmitted?.status != priority.status {
+      emit("claude_code", session, priority.status)
+    }
   }
   if !observedApp && !hasClaudeCodeHooks {
     trackers.removeAll()
     emit("system", nil, "unavailable", reason: "claude_not_running")
   }
-  Thread.sleep(forTimeInterval: 1)
+  waitForNextPoll(1)
 }

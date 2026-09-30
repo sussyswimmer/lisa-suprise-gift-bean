@@ -326,9 +326,9 @@ fn update_claude_hooks(settings: &mut Value) -> Result<(), String> {
 
     for (event, status) in [
         ("UserPromptSubmit", "working"),
-        // Tool results show a long turn is still running, including after
-        // the user answers a permission prompt.
-        ("PostToolUse", "working"),
+        // Tool results keep a long turn alive in the helper and end a
+        // permission prompt once it is answered; they are not shown directly.
+        ("PostToolUse", "heartbeat"),
         ("Stop", "completed"),
         ("MessageDisplay", "reply"),
         ("StopFailure", "failed"),

@@ -34,8 +34,19 @@ const columns = Number(options.columns ?? Math.max(1, Math.round(width / frameSi
 const rows = Math.max(1, Math.round(height / (width / columns)));
 const frames = Number(options.frames ?? columns * rows);
 const fps = Number(options.fps ?? 12);
-for (const [name, value] of Object.entries({ columns, frames, fps }))
-  if (!Number.isFinite(value) || value < 1) throw new Error(`Invalid ${name}: ${value}`);
+// Keep these limits in step with spriteSchema in src/beanAssets.ts: Bean
+// rejects the whole manifest, and every sheet in it, if one value is invalid.
+for (const [name, value] of Object.entries({ columns, rows, frames }))
+  if (!Number.isInteger(value) || value < 1 || value > 256)
+    throw new Error(`${name} must be a whole number from 1 to 256, received ${value}`);
+if (!(fps > 0 && fps <= 60)) throw new Error(`fps must be above 0 and at most 60, received ${options.fps}`);
+if (options.facing !== undefined && !["left", "right"].includes(options.facing))
+  throw new Error(`facing must be left or right, received ${options.facing}`);
+if (options.loop !== undefined && !["true", "false"].includes(options.loop))
+  throw new Error(`loop must be true or false, received ${options.loop}`);
+const scale = options.scale === undefined ? undefined : Number(options.scale);
+if (scale !== undefined && !(scale >= 0.5 && scale <= 2.5))
+  throw new Error(`scale must be from 0.5 to 2.5, received ${options.scale}`);
 if (frames > columns * rows) throw new Error(`${frames} frames do not fit a ${columns}×${rows} sheet`);
 
 const spritesDir = join(root, "public/bean/sprites");
@@ -43,11 +54,11 @@ mkdirSync(spritesDir, { recursive: true });
 const fileName = `${target}.png`;
 copyFileSync(source, join(spritesDir, fileName));
 
-const sprite = { src: `/bean/sprites/${fileName}`, frames, fps };
-if (columns !== frames) sprite.columns = columns;
+// Always record the real grid so empty trailing cells cannot skew the frames.
+const sprite = { src: `/bean/sprites/${fileName}`, frames, fps, columns, rows };
 if (options.facing) sprite.facing = options.facing;
 if (options.loop === "false") sprite.loop = false;
-if (options.scale) sprite.scale = Number(options.scale);
+if (scale !== undefined) sprite.scale = scale;
 
 const manifestPath = join(root, "public/bean/manifest.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));

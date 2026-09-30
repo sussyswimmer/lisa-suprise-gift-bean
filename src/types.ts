@@ -33,6 +33,8 @@ export interface SpriteAsset {
   fps: number;
   /** Frames per row; defaults to one row holding every frame. */
   columns?: number;
+  /** Rows in the sheet, when it has more than the frames fill (empty cells). */
+  rows?: number;
   loop?: boolean;
   /** The way Bean looks in the art, so motion can flip her the right way. */
   facing?: "left" | "right";

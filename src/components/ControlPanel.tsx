@@ -1,6 +1,8 @@
 interface ControlPanelProps {
   open: boolean;
   unavailable: boolean;
+  /** Only then can resetting macOS Accessibility help. */
+  permissionDenied: boolean;
   paused: boolean;
   soundEnabled: boolean;
   showContent: boolean;
@@ -31,6 +33,7 @@ function CloseIcon() {
 export default function ControlPanel({
   open,
   unavailable,
+  permissionDenied,
   paused,
   soundEnabled,
   showContent,
@@ -132,7 +135,7 @@ export default function ControlPanel({
             ? "Check Accessibility"
             : "Refresh connection"}
       </button>
-      {unavailable && (
+      {permissionDenied && (
         <button
           className="accessibility-reset"
           type="button"
