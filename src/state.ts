@@ -17,6 +17,8 @@ export interface BeanPrefs {
   disabledActivities: string[];
   activityFrequency: ActivityFrequency;
   beanSize: BeanSize;
+  /** How big the status boxes above Bean's head are. */
+  bubbleSize: BeanSize;
   alwaysOnTop: boolean;
   showBubble: boolean;
   /** Completion chime volume, 0 to 100. */
@@ -57,6 +59,7 @@ const defaultPrefs: BeanPrefs = {
   disabledActivities: [],
   activityFrequency: "normal",
   beanSize: "medium",
+  bubbleSize: "medium",
   alwaysOnTop: true,
   showBubble: true,
   soundVolume: 60,
@@ -72,6 +75,7 @@ export const SETTINGS_KEYS = [
   "disabledActivities",
   "activityFrequency",
   "beanSize",
+  "bubbleSize",
   "alwaysOnTop",
   "showBubble",
   "soundVolume",
@@ -295,6 +299,11 @@ export function sanitizePrefs(
       prefs.beanSize,
       ["small", "medium", "large"],
       fallback.beanSize,
+    ),
+    bubbleSize: oneOf(
+      prefs.bubbleSize,
+      ["small", "medium", "large"],
+      fallback.bubbleSize,
     ),
     soundVolume: Number.isFinite(prefs.soundVolume)
       ? Math.min(100, Math.max(0, Math.round(prefs.soundVolume)))

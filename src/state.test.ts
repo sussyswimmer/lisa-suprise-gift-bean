@@ -406,11 +406,17 @@ describe("persisted controls and event ordering", () => {
       reducer(initialState, { type: "setWelcomeShown" }),
       {
         type: "patchPrefs",
-        patch: { beanSize: "small", soundVolume: 10, showBubble: false },
+        patch: {
+          beanSize: "small",
+          bubbleSize: "large",
+          soundVolume: 10,
+          showBubble: false,
+        },
       },
     );
     const reset = reducer(changed, { type: "resetSettings" });
     expect(reset.preferences.beanSize).toBe("medium");
+    expect(reset.preferences.bubbleSize).toBe("medium");
     expect(reset.preferences.soundVolume).toBe(60);
     expect(reset.preferences.showBubble).toBe(true);
     expect(reset.preferences.welcomeShown).toBe(true);
@@ -419,12 +425,14 @@ describe("persisted controls and event ordering", () => {
   it("rejects damaged settings from storage", () => {
     const prefs = sanitizePrefs({
       beanSize: "huge",
+      bubbleSize: "giant",
       activityFrequency: 3,
       soundVolume: 400,
       disabledActivities: "boba",
       alwaysOnTop: "yes",
     });
     expect(prefs.beanSize).toBe("medium");
+    expect(prefs.bubbleSize).toBe("medium");
     expect(prefs.activityFrequency).toBe("normal");
     expect(prefs.soundVolume).toBe(100);
     expect(prefs.disabledActivities).toEqual([]);

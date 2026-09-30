@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsApp from "./SettingsApp";
@@ -72,12 +73,26 @@ describe("Settings window", () => {
   it("sends each change to Bean's window", () => {
     render(<SettingsApp />);
     fireEvent.click(screen.getByRole("button", { name: /Appearance/ }));
-    fireEvent.click(screen.getByRole("radio", { name: "Large" }));
+    const beanSize = () =>
+      within(screen.getByRole("radiogroup", { name: "Bean's size" }));
+    fireEvent.click(beanSize().getByRole("radio", { name: "Large" }));
     expect(bus.sendToBean).toHaveBeenCalledWith({
       type: "patch",
       patch: { beanSize: "large" },
     });
-    expect(screen.getByRole("radio", { name: "Large" })).toHaveProperty(
+    expect(beanSize().getByRole("radio", { name: "Large" })).toHaveProperty(
+      "ariaChecked",
+      "true",
+    );
+
+    const bubbleSize = () =>
+      within(screen.getByRole("radiogroup", { name: "Speech bubble size" }));
+    fireEvent.click(bubbleSize().getByRole("radio", { name: "Small" }));
+    expect(bus.sendToBean).toHaveBeenCalledWith({
+      type: "patch",
+      patch: { bubbleSize: "small" },
+    });
+    expect(bubbleSize().getByRole("radio", { name: "Small" })).toHaveProperty(
       "ariaChecked",
       "true",
     );

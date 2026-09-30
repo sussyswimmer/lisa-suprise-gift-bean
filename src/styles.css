@@ -32,6 +32,9 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
   box-shadow: 0 3px 0 rgba(35, 58, 98, .15), 0 8px 16px rgba(29, 42, 60, .16);
   font-family: "Courier New", monospace;
   pointer-events: auto;
+  /* The bubble size setting; the top bar only shrinks, so it never clips. */
+  scale: min(var(--bubble-scale, 1), 1);
+  transform-origin: 50% 0;
 }
 .bean-brand { display: inline-flex; align-items: center; gap: 5px; min-width: 66px; color: #243b68; font-size: 12px; font-weight: 800; letter-spacing: -.3px; }
 .bean-mark { display: block; flex: 0 0 auto; }
@@ -116,6 +119,9 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
   color: #202c3b;
   font-family: "Courier New", monospace;
   pointer-events: none;
+  /* The bubble size setting; it grows from its tail so it stays over Bean. */
+  scale: var(--bubble-scale, 1);
+  transform-origin: 50% 100%;
 }
 .activity-bubble::after {
   content: "";

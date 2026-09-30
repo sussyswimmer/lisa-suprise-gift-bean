@@ -436,6 +436,21 @@ export default function SettingsApp() {
                   onChange={(on) => update({ showBubble: on })}
                 />
               </Row>
+              <Row
+                title="Speech bubble size"
+                detail="How big the boxes above her head are."
+              >
+                <Segmented<BeanSize>
+                  label="Speech bubble size"
+                  value={prefs.bubbleSize}
+                  onChange={(value) => update({ bubbleSize: value })}
+                  options={[
+                    { value: "small", label: "Small" },
+                    { value: "medium", label: "Medium" },
+                    { value: "large", label: "Large" },
+                  ]}
+                />
+              </Row>
             </Card>
           </>
         )}

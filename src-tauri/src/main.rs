@@ -1,3 +1,6 @@
+#[cfg(target_os = "macos")]
+mod macos_spaces;
+
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -489,11 +492,32 @@ fn set_window_mode(app: AppHandle, compact: bool, scale: Option<f64>) -> Result<
 
 #[tauri::command]
 fn set_always_on_top(app: AppHandle, on_top: bool) -> Result<(), String> {
-    app.get_webview_window("main")
-        .ok_or("main window is unavailable")?
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window is unavailable")?;
+    window
         .set_always_on_top(on_top)
-        .map_err(|e| format!("could not change Bean's window level: {e}"))
+        .map_err(|e| format!("could not change Bean's window level: {e}"))?;
+    follow_all_spaces(&window, on_top);
+    Ok(())
 }
+
+/// Keeps Bean on every desktop and over full-screen apps, so she follows
+/// you when you swipe between Spaces.
+#[cfg(target_os = "macos")]
+fn follow_all_spaces(window: &tauri::WebviewWindow, on_top: bool) {
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        if let Ok(ns_window) = target.ns_window() {
+            // SAFETY: Tauri hands back Bean's live NSWindow, and this runs on
+            // the main thread as AppKit requires.
+            unsafe { macos_spaces::follow_all_spaces(ns_window, on_top) };
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn follow_all_spaces(_window: &tauri::WebviewWindow, _on_top: bool) {}
 
 #[tauri::command]
 fn reset_window_position(app: AppHandle) -> Result<(), String> {
@@ -659,8 +683,13 @@ fn main() {
             quit_app
         ])
         .setup(|app| {
+            // A menu-bar-only app may place its windows over other apps'
+            // full-screen Spaces; a regular Dock app may not.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             if let Some(main_window) = app.get_webview_window("main") {
                 let _ = main_window.set_always_on_top(true);
+                follow_all_spaces(&main_window, true);
             }
             build_tray(app.handle())?;
             Ok(())

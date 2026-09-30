@@ -44,6 +44,13 @@ const BEAN_SCALE: Record<BeanSize, number> = {
   large: 1.25,
 };
 
+// The status boxes above Bean's head; large still fits her 272 px window.
+const BUBBLE_SCALE: Record<BeanSize, number> = {
+  small: 0.78,
+  medium: 1,
+  large: 1.12,
+};
+
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState, (fallback) => {
     try {
@@ -95,6 +102,7 @@ export default function App() {
   }, []);
 
   const beanScale = BEAN_SCALE[state.preferences.beanSize] ?? 1;
+  const bubbleScale = BUBBLE_SCALE[state.preferences.bubbleSize] ?? 1;
   useEffect(() => {
     if (!isBeanDesktop()) return;
     void invoke("set_window_mode", {
@@ -457,7 +465,12 @@ export default function App() {
   return (
     <div
       className={`app-shell${state.preferences.welcomeShown ? "" : " app-welcome"}`}
-      style={{ "--bean-scale": beanScale } as CSSProperties}
+      style={
+        {
+          "--bean-scale": beanScale,
+          "--bubble-scale": bubbleScale,
+        } as CSSProperties
+      }
     >
       {state.preferences.welcomeShown ? (
         <main className="shell-content">
