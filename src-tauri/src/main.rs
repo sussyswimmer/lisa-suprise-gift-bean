@@ -1,10 +1,11 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -24,6 +25,8 @@ struct ClaudeEvent {
 struct ObserverState {
     child: Mutex<Option<Child>>,
     generation: AtomicU64,
+    // Generation of the running supervisor, or 0 when Bean is not observing.
+    active_generation: AtomicU64,
     last_event: Mutex<Option<ClaudeEvent>>,
 }
 
@@ -57,59 +60,150 @@ fn publish_observer_event(app: &AppHandle, event: &ClaudeEvent) {
 
 #[tauri::command]
 fn start_observer(state: State<'_, BeanState>, app: AppHandle) -> Result<String, String> {
-    let mut running = state
-        .observer
-        .child
-        .lock()
-        .map_err(|e| format!("observer lock failed: {e}"))?;
-    if let Some(child) = running.as_mut() {
-        if child
-            .try_wait()
-            .map_err(|e| format!("could not check observer: {e}"))?
-            .is_none()
-        {
-            return Ok("already_running".into());
-        }
-        *running = None;
-    }
+    let helper = resolve_sidecar_path(&app)?;
+    start_supervised_observer(&state.observer, helper, move |event| {
+        publish_observer_event(&app, &event)
+    })
+}
 
-    let sidecar = resolve_sidecar_path(&app)?;
-    let mut child = Command::new(&sidecar)
+fn spawn_observer_helper(helper: &Path) -> Result<(Child, ChildStdout), String> {
+    let mut child = Command::new(helper)
         .arg("--mode")
         .arg("observe")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("failed to launch observer helper at {sidecar:?}: {e}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "observer helper did not provide stdout".to_string())?;
+        .map_err(|e| format!("failed to launch observer helper at {helper:?}: {e}"))?;
+    match child.stdout.take() {
+        Some(stdout) => Ok((child, stdout)),
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err("observer helper did not provide stdout".into())
+        }
+    }
+}
 
-    let generation = state.observer.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    if let Ok(mut cached) = state.observer.last_event.lock() {
+fn start_supervised_observer<F>(
+    observer: &Arc<ObserverState>,
+    helper: PathBuf,
+    publish: F,
+) -> Result<String, String>
+where
+    F: Fn(ClaudeEvent) + Send + 'static,
+{
+    let mut running = observer
+        .child
+        .lock()
+        .map_err(|e| format!("observer lock failed: {e}"))?;
+    if observer.active_generation.load(Ordering::SeqCst) != 0 {
+        return Ok("already_running".into());
+    }
+
+    // Launch the first helper here so a missing or broken helper is reported
+    // to the caller instead of only being retried in the background.
+    let (child, stdout) = spawn_observer_helper(&helper)?;
+    let generation = observer.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    observer
+        .active_generation
+        .store(generation, Ordering::SeqCst);
+    if let Ok(mut cached) = observer.last_event.lock() {
         *cached = None;
     }
-    let emit_target = app.clone();
-    let observer = state.observer.clone();
+    *running = Some(child);
+
+    let supervised = observer.clone();
     thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if !line.trim().is_empty() {
-                if let Ok(event) = serde_json::from_str::<ClaudeEvent>(&line) {
-                    if let Ok(mut last_event) = observer.last_event.lock() {
-                        if observer.generation.load(Ordering::SeqCst) != generation {
-                            break;
-                        }
-                        *last_event = Some(event.clone());
-                    }
-                    publish_observer_event(&emit_target, &event);
+        supervise_observer(&supervised, &helper, generation, stdout, publish);
+        let _ = supervised.active_generation.compare_exchange(
+            generation,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    });
+    Ok("started".into())
+}
+
+// Keep the helper alive for as long as Bean is observing. Without this, one
+// helper crash or exit silently stopped every Claude update until Bean was
+// restarted or the connection was refreshed by hand.
+fn supervise_observer<F>(
+    observer: &ObserverState,
+    helper: &Path,
+    generation: u64,
+    stdout: ChildStdout,
+    publish: F,
+) where
+    F: Fn(ClaudeEvent),
+{
+    let is_current = || observer.generation.load(Ordering::SeqCst) == generation;
+    let mut stdout = Some(stdout);
+    let mut failures: u32 = 0;
+    loop {
+        if let Some(output) = stdout.take() {
+            let started = Instant::now();
+            for line in BufReader::new(output).lines().map_while(Result::ok) {
+                let Ok(event) = serde_json::from_str::<ClaudeEvent>(&line) else {
+                    continue;
+                };
+                if !is_current() {
+                    return;
                 }
+                if let Ok(mut last_event) = observer.last_event.lock() {
+                    *last_event = Some(event.clone());
+                }
+                publish(event);
+            }
+            if started.elapsed() >= Duration::from_secs(30) {
+                failures = 0;
             }
         }
-    });
 
-    *running = Some(child);
-    Ok("started".into())
+        {
+            let Ok(mut running) = observer.child.lock() else {
+                return;
+            };
+            if !is_current() {
+                return;
+            }
+            if let Some(mut child) = running.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+
+        failures = failures.saturating_add(1);
+        thread::sleep(Duration::from_millis(500 * u64::from(failures.min(10))));
+
+        let Ok(mut running) = observer.child.lock() else {
+            return;
+        };
+        if !is_current() {
+            return;
+        }
+        if let Ok((child, output)) = spawn_observer_helper(helper) {
+            stdout = Some(output);
+            *running = Some(child);
+        }
+    }
+}
+
+fn stop_supervised_observer(observer: &ObserverState) -> Result<(), String> {
+    let mut running = observer
+        .child
+        .lock()
+        .map_err(|e| format!("observer lock failed: {e}"))?;
+    observer.generation.fetch_add(1, Ordering::SeqCst);
+    observer.active_generation.store(0, Ordering::SeqCst);
+    if let Some(mut child) = running.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    if let Ok(mut cached) = observer.last_event.lock() {
+        *cached = None;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -124,19 +218,7 @@ fn get_observer_status(state: State<'_, BeanState>) -> Option<ClaudeEvent> {
 
 #[tauri::command]
 fn stop_observer(state: State<'_, BeanState>) -> Result<String, String> {
-    let mut running = state
-        .observer
-        .child
-        .lock()
-        .map_err(|e| format!("observer lock failed: {e}"))?;
-    state.observer.generation.fetch_add(1, Ordering::SeqCst);
-    if let Some(mut child) = running.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    if let Ok(mut cached) = state.observer.last_event.lock() {
-        *cached = None;
-    }
+    stop_supervised_observer(&state.observer)?;
     Ok("stopped".into())
 }
 
@@ -174,6 +256,24 @@ async fn request_accessibility_permission(app: AppHandle) -> Result<bool, String
     let event: ClaudeEvent = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("Accessibility helper returned an invalid response: {e}"))?;
     Ok(event.status != "unavailable")
+}
+
+// Test builds are ad-hoc signed, so every new build has a different signature.
+// macOS keeps showing the old Accessibility switch as on while denying the new
+// build. Clearing Bean's entry lets the next request register this build.
+#[tauri::command]
+async fn reset_accessibility_permission(app: AppHandle) -> Result<bool, String> {
+    let identifier = app.config().identifier.clone();
+    let status = Command::new("/usr/bin/tccutil")
+        .args(["reset", "Accessibility", &identifier])
+        .status()
+        .map_err(|e| format!("could not reset Accessibility permission: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "tccutil could not reset Bean's permission ({status})"
+        ));
+    }
+    request_accessibility_permission(app).await
 }
 
 #[tauri::command]
@@ -226,6 +326,9 @@ fn update_claude_hooks(settings: &mut Value) -> Result<(), String> {
 
     for (event, status) in [
         ("UserPromptSubmit", "working"),
+        // Tool results show a long turn is still running, including after
+        // the user answers a permission prompt.
+        ("PostToolUse", "working"),
         ("Stop", "completed"),
         ("MessageDisplay", "reply"),
         ("StopFailure", "failed"),
@@ -294,8 +397,10 @@ fn get_asset_pack_path(state: State<'_, BeanState>) -> Option<String> {
     state.asset_pack_path.lock().ok().and_then(|s| s.clone())
 }
 
+// The helper retries while Claude builds its accessibility tree; run it off the
+// main thread so Bean's window stays responsive.
 #[tauri::command]
-fn get_connection_status(app: AppHandle) -> Result<ClaudeEvent, String> {
+async fn get_connection_status(app: AppHandle) -> Result<ClaudeEvent, String> {
     let output = Command::new(resolve_sidecar_path(&app)?)
         .arg("--connection-status")
         .output()
@@ -408,6 +513,7 @@ fn main() {
             set_asset_pack_path,
             get_asset_pack_path,
             request_accessibility_permission,
+            reset_accessibility_permission,
             install_claude_code_hooks,
             get_connection_status,
             open_claude,
@@ -426,13 +532,7 @@ fn main() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
-                let state = app.state::<BeanState>();
-                if let Ok(mut running) = state.observer.child.lock() {
-                    if let Some(mut child) = running.take() {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                    }
-                };
+                let _ = stop_supervised_observer(&app.state::<BeanState>().observer);
             }
         });
 }
@@ -461,5 +561,53 @@ mod tests {
     fn rejects_malformed_hook_configuration() {
         assert!(update_claude_hooks(&mut json!({"hooks": []})).is_err());
         assert!(update_claude_hooks(&mut json!({"hooks": {"Stop": {}}})).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn observer_restarts_an_exited_helper_until_stopped() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::mpsc;
+
+        let dir = std::env::temp_dir().join(format!("bean-observer-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let helper = dir.join("helper");
+        fs::write(
+            &helper,
+            "#!/bin/sh\necho '{\"source\":\"chat\",\"session\":null,\"status\":\"idle\",\"timestamp\":\"2026-09-30T00:00:00Z\"}'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let observer = Arc::new(ObserverState::default());
+        let (sender, receiver) = mpsc::channel();
+        let started = start_supervised_observer(&observer, helper.clone(), move |event| {
+            let _ = sender.send(event.status);
+        });
+        assert_eq!(started.unwrap(), "started");
+        // The helper exits after one event, so a second event means it was relaunched.
+        for _ in 0..2 {
+            let status = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(status, "idle");
+        }
+        assert_eq!(
+            start_supervised_observer(&observer, helper, |_| {}).unwrap(),
+            "already_running"
+        );
+
+        stop_supervised_observer(&observer).unwrap();
+        while receiver.recv_timeout(Duration::from_millis(1_500)).is_ok() {}
+        assert!(receiver.recv_timeout(Duration::from_secs(2)).is_err());
+        assert_eq!(observer.active_generation.load(Ordering::SeqCst), 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn observer_start_reports_a_missing_helper() {
+        let observer = Arc::new(ObserverState::default());
+        let missing = std::env::temp_dir().join("bean-observer-missing-helper");
+        assert!(start_supervised_observer(&observer, missing, |_| {}).is_err());
+        assert_eq!(observer.active_generation.load(Ordering::SeqCst), 0);
     }
 }

@@ -32,3 +32,26 @@ Use these prompts with the approved Bean reference photos. Keep the character **
 
 ### sound-off — quiet idle
 "Original compact apricot toy poodle game companion, polished 8-bit-inspired pixel art. Bean sits in a quiet calm pose, blinks slowly, and makes one gentle tail wag. Warm-gold and midnight-blue palette, pale background, seamless loop. No photorealism, people, text, logos, or branded characters."
+
+## Animated sprite sheets (AutoSprite)
+
+Bean plays sprite sheets frame by frame, so real running, walking, and jumping come from Higgsfield's **AutoSprite** model (`autosprite`). Use `public/bean/generated/idle.png` as the single `image` input (or `working.png` for the typing loop) so every sheet keeps Bean's face, curls, and palette. Set `is_humanoid: false`, `frame_size: 256`, `remove_bg: default`, and `video_tier: turbo` (use `pro` if the legs smear).
+
+| Bean slot | AutoSprite `kind` | `frame_count` | Custom prompt (only for `kind: custom`) |
+| --- | --- | --- | --- |
+| `run` motion — zoomies and running to the laptop | `run` | 12 | — |
+| `walk` motion — trotting around | `walk` | 12 | — |
+| `happy` state — completion | `jump` | 16 | — |
+| `idle` state | `idle` | 16 | — |
+| `thinking` state (from `working.png`) | `custom`, name `typing` | 12 | "Bean alternates both front paws on the tiny laptop keyboard, small focused head bob, seamless loop." |
+| `sleepy` state | `custom`, name `nap` | 16 | "Bean lies down curled up and breathes slowly, one ear twitches, seamless loop." |
+| `noticed` state | `custom`, name `alert` | 12 | "Bean perks both ears and makes two short alert bounces, seamless loop." |
+
+Download each sheet, then add it:
+
+```bash
+npm run add:sprite -- run ~/Downloads/bean-run.png --fps 12 --facing right
+npm run add:sprite -- happy ~/Downloads/bean-jump.png --fps 14 --loop false
+```
+
+The script copies the sheet to `public/bean/sprites/` and updates `public/bean/manifest.json`. Frames default to a grid of 256 px cells; pass `--frames` and `--columns` when the sheet has empty trailing cells. Use `--facing right` for side-view sheets where Bean looks right, so she is mirrored the correct way while running.

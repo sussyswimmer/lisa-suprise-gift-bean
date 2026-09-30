@@ -17,7 +17,8 @@
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\"",
-    "build:helper": "node scripts/build-helper.mjs"
+    "build:helper": "node scripts/build-helper.mjs",
+    "add:sprite": "node scripts/add-sprite.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.4",

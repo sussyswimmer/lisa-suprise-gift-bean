@@ -193,6 +193,9 @@ export function sanitizePrefs(
   ) as unknown as BeanPrefs;
 }
 
+/** How long "Reply is ready!" stays up before quiet updates replace it. */
+export const CELEBRATION_HOLD_MS = 6_000;
+
 export function buildDedupKey(event: ClaudeEvent): string {
   return JSON.stringify([
     event.source,
@@ -241,6 +244,15 @@ export function nextStateFromEvent(
   if (
     now.lastStatusTs &&
     Date.parse(event.timestamp) < Date.parse(now.lastStatusTs)
+  )
+    return now;
+  // Claude reports idle again within a second of finishing; let Bean finish
+  // celebrating so the completion is actually noticeable.
+  if (
+    now.beanState === "happy" &&
+    (status === "idle" || status === "reply" || status === "message") &&
+    Date.parse(event.timestamp) - Date.parse(now.preferences.lastCompletedAt) <
+      CELEBRATION_HOLD_MS
   )
     return now;
   const sameSession =

@@ -23,6 +23,37 @@ describe("external data validation", () => {
     );
     expect(await loadManifest()).toEqual(DEFAULT_ASSET_PACK);
   });
+  it("accepts animated sprite sheets and running art", async () => {
+    const pack = {
+      ...DEFAULT_ASSET_PACK,
+      states: {
+        ...DEFAULT_ASSET_PACK.states,
+        happy: { src: "/bean/sprites/jump.png", frames: 12, fps: 14 },
+      },
+      motions: {
+        run: { src: "/bean/sprites/run.png", frames: 8, fps: 12, columns: 4 },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => pack }),
+    );
+    expect(await loadManifest()).toEqual(pack);
+  });
+  it("falls back when a sprite sheet is malformed", async () => {
+    const pack = {
+      ...DEFAULT_ASSET_PACK,
+      states: {
+        ...DEFAULT_ASSET_PACK.states,
+        happy: { src: "/bean/sprites/jump.png", frames: 0, fps: 14 },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => pack }),
+    );
+    expect(await loadManifest()).toBe(DEFAULT_ASSET_PACK);
+  });
   it("rejects malformed native events before rendering", () => {
     const event = {
       source: "chat",

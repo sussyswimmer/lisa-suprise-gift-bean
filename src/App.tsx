@@ -29,6 +29,7 @@ import {
   DEFAULT_ASSET_PACK,
   loadManifest,
   normalizeStatusForAsset,
+  preloadAssets,
 } from "./beanAssets";
 
 const PREFS_KEY = "bean.preferences.v1";
@@ -92,6 +93,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [checkingAccess, setCheckingAccess] = useState(false);
   const [accessMessage, setAccessMessage] = useState("");
+  const [permissionBlocked, setPermissionBlocked] = useState(false);
   const connectionRequested = useRef(false);
 
   useEffect(() => {
@@ -99,9 +101,11 @@ export default function App() {
   }, [state]);
 
   useEffect(() => {
-    void loadManifest().then((nextManifest) =>
-      setManifest(nextManifest ?? DEFAULT_ASSET_PACK),
-    );
+    void loadManifest().then((nextManifest) => {
+      const loaded = nextManifest ?? DEFAULT_ASSET_PACK;
+      setManifest(loaded);
+      preloadAssets(loaded);
+    });
     if (isBeanDesktop()) {
       void invoke<string | null>("get_asset_pack_path", {})
         .then((saved) => {
@@ -232,27 +236,20 @@ export default function App() {
     );
   }, [state.preferences.welcomeShown, showContent]);
 
-  const mappedAsset = useMemo(() => {
-    const source = { ...manifest.states } as BeanAssetState;
+  const mappedAsset = useMemo<BeanAssetState>(() => {
+    if (!assetPackPath) return manifest.states;
+    // Convert each full file path; appending to an already converted folder
+    // URL mixes encoded and unencoded separators.
+    const folder = assetPackPath.replace(/\/+$/, "");
+    const file = (name: string) => convertFileSrc(`${folder}/${name}`);
     return {
-      idle: source.idle,
-      noticed: source.noticed,
-      thinking: source.thinking,
-      message: source.message,
-      happy: source.happy,
-      sleepy: source.sleepy,
-      soundOff: source.soundOff,
-      ...(assetPackPath
-        ? {
-            idle: `${convertFileSrc(assetPackPath)}/idle.svg`,
-            noticed: `${convertFileSrc(assetPackPath)}/noticed.svg`,
-            thinking: `${convertFileSrc(assetPackPath)}/thinking.svg`,
-            message: `${convertFileSrc(assetPackPath)}/message.svg`,
-            happy: `${convertFileSrc(assetPackPath)}/happy.svg`,
-            sleepy: `${convertFileSrc(assetPackPath)}/sleepy.svg`,
-            soundOff: `${convertFileSrc(assetPackPath)}/sound-off.svg`,
-          }
-        : null),
+      idle: file("idle.svg"),
+      noticed: file("noticed.svg"),
+      thinking: file("thinking.svg"),
+      message: file("message.svg"),
+      happy: file("happy.svg"),
+      sleepy: file("sleepy.svg"),
+      soundOff: file("sound-off.svg"),
     };
   }, [manifest, assetPackPath]);
 
@@ -285,6 +282,7 @@ export default function App() {
       const accessibilityGranted = await invoke<boolean>(
         "request_accessibility_permission",
       );
+      setPermissionBlocked(!accessibilityGranted);
       if (!accessibilityGranted) {
         throw new Error(
           "Allow Bean in System Settings → Privacy & Security → Accessibility, then choose Connect again.",
@@ -354,6 +352,28 @@ export default function App() {
     }
   };
 
+  const resetAccessibility = async (report: (message: string) => void) => {
+    if (!isBeanDesktop()) return;
+    setCheckingAccess(true);
+    report("");
+    try {
+      const granted = await invoke<boolean>("reset_accessibility_permission");
+      setPermissionBlocked(!granted);
+      if (granted && state.preferences.welcomeShown && !state.paused) {
+        await invoke("start_observer");
+      }
+      report(
+        granted
+          ? "Accessibility is working again. Bean is reconnecting to Claude."
+          : "Bean's old permission was cleared. Turn Bean on in System Settings → Privacy & Security → Accessibility, then connect again.",
+      );
+    } catch (error) {
+      report(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCheckingAccess(false);
+    }
+  };
+
   const currentAsset = mappedAsset[normalizeStatusForAsset(state.beanState)];
 
   return (
@@ -410,6 +430,8 @@ export default function App() {
             session={state.session}
             preview={showContent ? state.preview : null}
             asset={currentAsset}
+            restAsset={mappedAsset.idle}
+            motions={assetPackPath ? {} : manifest.motions}
             onDragStart={handleDrag}
           />
           <ControlPanel
@@ -431,6 +453,7 @@ export default function App() {
             }
             onShowContentChange={setShowContent}
             onCheckAccess={() => void checkAccessibility()}
+            onResetAccess={() => void resetAccessibility(setAccessMessage)}
           />
         </main>
       ) : (
@@ -438,6 +461,7 @@ export default function App() {
           showContent={showContent}
           connecting={connecting}
           connectionError={connectionError}
+          permissionBlocked={permissionBlocked}
           onShowContentChange={setShowContent}
           onConnect={() => void connectClaude()}
           onOpenClaude={() =>
@@ -449,6 +473,9 @@ export default function App() {
             void invoke("open_accessibility_settings").catch((error) =>
               setConnectionError(String(error)),
             )
+          }
+          onResetAccessibility={() =>
+            void resetAccessibility(setConnectionError)
           }
         />
       )}

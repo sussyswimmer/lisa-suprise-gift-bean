@@ -181,6 +181,54 @@ describe("Bean state reducer", () => {
   });
 });
 
+describe("completion celebration", () => {
+  const completed = {
+    source: "chat" as const,
+    session: "s1",
+    status: "completed" as const,
+    timestamp: "2026-09-30T00:00:00Z",
+  };
+  it("keeps celebrating briefly when Claude immediately reports idle", () => {
+    const happy = reducer(initialState, {
+      type: "claudeEvent",
+      event: completed,
+    });
+    const soon = reducer(happy, {
+      type: "claudeEvent",
+      event: {
+        ...completed,
+        status: "idle",
+        timestamp: "2026-09-30T00:00:02Z",
+      },
+    });
+    expect(soon.beanState).toBe("happy");
+    const later = reducer(soon, {
+      type: "claudeEvent",
+      event: {
+        ...completed,
+        status: "idle",
+        timestamp: "2026-09-30T00:00:07Z",
+      },
+    });
+    expect(later.beanState).toBe("idle");
+  });
+  it("still lets new work or attention interrupt the celebration", () => {
+    const happy = reducer(initialState, {
+      type: "claudeEvent",
+      event: completed,
+    });
+    const working = reducer(happy, {
+      type: "claudeEvent",
+      event: {
+        ...completed,
+        status: "working",
+        timestamp: "2026-09-30T00:00:01Z",
+      },
+    });
+    expect(working.beanState).toBe("thinking");
+  });
+});
+
 describe("persisted controls and event ordering", () => {
   const event = {
     source: "claude_code" as const,

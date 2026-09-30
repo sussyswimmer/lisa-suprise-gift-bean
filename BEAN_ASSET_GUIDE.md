@@ -23,6 +23,16 @@ Preferred export:
 - PNG/SVG with no shadow
 - alpha channel preserved
 
+## Animated sprite sheets
+
+`public/bean/manifest.json` accepts a still image path or a sprite sheet for every state:
+
+```json
+"happy": { "src": "/bean/sprites/happy.png", "frames": 16, "fps": 14, "columns": 4, "loop": false }
+```
+
+Optional `motions.run` and `motions.walk` sheets are used while Bean runs zoomies, trots around, or runs to her laptop when Claude starts working. Without them she moves with the still art. Add sheets with `npm run add:sprite` (see `higgsfield-prompts.md`).
+
 ## File fallback rules
 
 - Missing files always fall back to `public/bean/manifest.json` references.

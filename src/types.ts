@@ -26,19 +26,33 @@ export interface ClaudeEvent {
   reason?: string | null;
 }
 
-export interface BeanAssetState {
-  idle: string;
-  noticed: string;
-  thinking: string;
-  message: string;
-  happy: string;
-  sleepy: string;
-  soundOff: string;
+/** A horizontal or grid sprite sheet, such as a Higgsfield AutoSprite export. */
+export interface SpriteAsset {
+  src: string;
+  frames: number;
+  fps: number;
+  /** Frames per row; defaults to one row holding every frame. */
+  columns?: number;
+  loop?: boolean;
+  /** The way Bean looks in the art, so motion can flip her the right way. */
+  facing?: "left" | "right";
 }
+
+/** A still image path or an animated sprite sheet. */
+export type BeanAsset = string | SpriteAsset;
+
+export type BeanAssetKey =
+  "idle" | "noticed" | "thinking" | "message" | "happy" | "sleepy" | "soundOff";
+
+export type BeanAssetState = Record<BeanAssetKey, BeanAsset>;
+
+/** Optional movement art used while Bean travels around her window. */
+export type BeanMotion = "run" | "walk";
 
 export interface BeanManifest {
   version: string;
-  states: Record<keyof BeanAssetState, string>;
+  states: BeanAssetState;
+  motions?: Partial<Record<BeanMotion, BeanAsset>>;
 }
 
 export const claudeEventSchema = z.object({

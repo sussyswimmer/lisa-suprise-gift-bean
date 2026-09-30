@@ -2,20 +2,24 @@ interface WelcomeDialogProps {
   showContent: boolean;
   connecting: boolean;
   connectionError: string;
+  permissionBlocked: boolean;
   onShowContentChange: (value: boolean) => void;
   onConnect: () => void;
   onOpenClaude: () => void;
   onOpenAccessibility: () => void;
+  onResetAccessibility: () => void;
 }
 
 export default function WelcomeDialog({
   showContent,
   connecting,
   connectionError,
+  permissionBlocked,
   onShowContentChange,
   onConnect,
   onOpenClaude,
   onOpenAccessibility,
+  onResetAccessibility,
 }: WelcomeDialogProps) {
   return (
     <main className="welcome-dialog">
@@ -53,6 +57,19 @@ export default function WelcomeDialog({
       {connectionError && (
         <p className="connection-error" role="alert">
           {connectionError}
+        </p>
+      )}
+      {permissionBlocked && (
+        <p className="welcome-detail">
+          Already switched on? A new Bean build needs to be allowed again.{" "}
+          <button
+            className="inline-reset"
+            type="button"
+            onClick={onResetAccessibility}
+            disabled={connecting}
+          >
+            Reset permission
+          </button>
         </p>
       )}
       <small>

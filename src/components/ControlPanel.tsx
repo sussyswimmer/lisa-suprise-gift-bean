@@ -12,6 +12,7 @@ interface ControlPanelProps {
   onSoundToggle: () => void;
   onShowContentChange: (value: boolean) => void;
   onCheckAccess: () => void;
+  onResetAccess: () => void;
 }
 
 function CloseIcon() {
@@ -41,6 +42,7 @@ export default function ControlPanel({
   onSoundToggle,
   onShowContentChange,
   onCheckAccess,
+  onResetAccess,
 }: ControlPanelProps) {
   if (!open) return null;
 
@@ -130,6 +132,16 @@ export default function ControlPanel({
             ? "Check Accessibility"
             : "Refresh connection"}
       </button>
+      {unavailable && (
+        <button
+          className="accessibility-reset"
+          type="button"
+          onClick={onResetAccess}
+          disabled={checkingAccess}
+        >
+          Bean is switched on but still blocked? Reset permission
+        </button>
+      )}
     </aside>
   );
 }

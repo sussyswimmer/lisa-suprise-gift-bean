@@ -1,19 +1,27 @@
 import { useEffect, useState, type MouseEvent } from "react";
-import { BeanState } from "../types";
+import { BeanAsset, BeanMotion, BeanState } from "../types";
+import {
+  ACTIVITY_DURATIONS_MS,
+  ACTIVITY_LABELS,
+  IdleActivity,
+  isWaitingState,
+  motionFor,
+  nextActivity,
+} from "../activity";
+import BeanSprite from "./BeanSprite";
 
 interface BeanCompanionProps {
   state: BeanState;
-  asset: string;
+  asset: BeanAsset;
+  /** Bean without props, used while she runs somewhere without a run sheet. */
+  restAsset?: BeanAsset;
+  motions?: Partial<Record<BeanMotion, BeanAsset>>;
   statusText: string;
   source: string;
   session: string | null;
   preview: string | null;
   onDragStart: () => void;
 }
-
-type IdleActivity = "breathe" | "peek" | "hop" | "boba";
-
-const IDLE_ACTIVITIES: IdleActivity[] = ["breathe", "peek", "hop", "boba"];
 
 function bubbleFor(
   state: BeanState,
@@ -61,6 +69,8 @@ function bubbleFor(
 export default function BeanCompanion({
   state,
   asset,
+  restAsset = asset,
+  motions = {},
   statusText,
   source,
   session,
@@ -68,6 +78,9 @@ export default function BeanCompanion({
   onDragStart,
 }: BeanCompanionProps) {
   const [idleActivity, setIdleActivity] = useState<IdleActivity>("breathe");
+  const [previousState, setPreviousState] = useState(state);
+  const [arrival, setArrival] = useState(0);
+  const [settledArrival, setSettledArrival] = useState(0);
   const animationLabel: Record<BeanState, string> = {
     idle: "gentle idle breathing and tail wag",
     thinking: "typing on a tiny computer",
@@ -78,8 +91,23 @@ export default function BeanCompanion({
     soundOff: "quiet idle",
   };
   const bubble = bubbleFor(state, source, statusText, session, preview);
-  const isWaiting =
-    state === "idle" || state === "sleepy" || state === "soundOff";
+  const isWaiting = isWaitingState(state);
+
+  // Bean runs over to her laptop whenever Claude starts a new piece of work.
+  if (state !== previousState) {
+    setPreviousState(state);
+    if (state === "thinking") setArrival((count) => count + 1);
+  }
+  const isArriving = state === "thinking" && arrival !== settledArrival;
+
+  useEffect(() => {
+    if (arrival === 0) return;
+    const timeoutId = window.setTimeout(
+      () => setSettledArrival(arrival),
+      1_100,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [arrival]);
 
   useEffect(() => {
     if (!isWaiting) {
@@ -87,18 +115,33 @@ export default function BeanCompanion({
       return;
     }
 
-    const chooseNextActivity = () => {
-      const choices = IDLE_ACTIVITIES.filter(
-        (activity) => activity !== idleActivity,
-      );
-      setIdleActivity(choices[Math.floor(Math.random() * choices.length)]);
-    };
+    // Alternate calm breathing with one short activity at a time.
+    const resting = idleActivity === "breathe";
     const timeoutId = window.setTimeout(
-      chooseNextActivity,
-      6_500 + Math.floor(Math.random() * 4_500),
+      () =>
+        setIdleActivity(resting ? nextActivity(state, "breathe") : "breathe"),
+      resting
+        ? 6_500 + Math.floor(Math.random() * 4_500)
+        : ACTIVITY_DURATIONS_MS[idleActivity],
     );
     return () => window.clearTimeout(timeoutId);
-  }, [isWaiting, idleActivity]);
+  }, [isWaiting, idleActivity, state]);
+
+  const activity: IdleActivity | "arrive" = isArriving
+    ? "arrive"
+    : isWaiting
+      ? idleActivity
+      : "breathe";
+  const motion = motionFor(activity);
+  const art =
+    (motion && motions[motion]) || (activity === "arrive" ? restAsset : asset);
+  const facesRight = typeof art !== "string" && art.facing === "right";
+  const activityLabel =
+    activity === "arrive"
+      ? "running to the laptop"
+      : activity === "breathe"
+        ? animationLabel[state]
+        : ACTIVITY_LABELS[activity];
 
   const startNativeDrag = (event: MouseEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;
@@ -123,14 +166,23 @@ export default function BeanCompanion({
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") void onDragStart();
         }}
-        aria-label={`Drag Bean — ${animationLabel[state]}`}
+        aria-label={`Drag Bean — ${activityLabel}`}
       >
         <div
-          className={`bean-stage idle-activity-${isWaiting ? idleActivity : "breathe"}`}
+          className={`bean-stage idle-activity-${activity}${motion ? " is-moving" : ""}`}
           aria-hidden="true"
         >
-          <img className="bean-image" src={asset} alt="" draggable={false} />
-          {isWaiting && idleActivity === "boba" && (
+          <div className={`bean-facing${facesRight ? " faces-right" : ""}`}>
+            <BeanSprite asset={art} />
+            {motion && (
+              <span className="dust-pixels">
+                <i />
+                <i />
+                <i />
+              </span>
+            )}
+          </div>
+          {activity === "boba" && (
             <span className="boba-cup">
               <i />
               <b />
@@ -139,7 +191,8 @@ export default function BeanCompanion({
               <em />
             </span>
           )}
-          {state === "thinking" && (
+          {activity === "chase" && <span className="chase-swirl" />}
+          {state === "thinking" && !isArriving && (
             <span className="typing-pixels">
               <i />
               <i />
@@ -148,6 +201,8 @@ export default function BeanCompanion({
           )}
           {state === "happy" && (
             <span className="celebration-pixels">
+              <i />
+              <i />
               <i />
               <i />
               <i />

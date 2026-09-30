@@ -15,8 +15,16 @@ struct ClaudeEvent: Codable {
 struct SessionTracker {
   var sawWorking = false
   var quietPolls = 0
+  var inconclusivePolls = 0
   var composerFingerprint: Int?
   var lastComposerChange: Date?
+}
+
+struct DesktopObservation {
+  let source: String
+  let session: String?
+  let status: String
+  let reason: String?
 }
 
 let supportedApps = [
@@ -30,7 +38,11 @@ let supportedApps = [
 var trackers = [String: SessionTracker]()
 var claudeCodeEventOffset: UInt64 = 0
 var claudeCodeHooksAvailable = false
-var claudeCodeWorkingSessions = Set<String>()
+// Claude Code sessions that are working or waiting on the user, keyed by their
+// last hook event. Interrupting Claude Code with Esc fires no Stop hook, so
+// entries expire instead of hiding Claude Desktop activity forever.
+var claudeCodeActiveSessions = [String: Date]()
+let claudeCodeSessionTimeout: TimeInterval = 30 * 60
 var lastClaudeCodeEventAt: Date?
 var claudeCodeEventsURL = FileManager.default.homeDirectoryForCurrentUser
   .appendingPathComponent("Library/Application Support/Bean/claude-code-events")
@@ -50,6 +62,10 @@ func emit(_ source: String, _ session: String?, _ status: String, _ preview: Str
   fflush(stdout)
 }
 
+func emit(_ observation: DesktopObservation) {
+  emit(observation.source, observation.session, observation.status, reason: observation.reason)
+}
+
 func isAccessibilityTrusted() -> Bool {
   AXIsProcessTrustedWithOptions(nil)
 }
@@ -67,14 +83,30 @@ func stringValue(_ element: AXUIElement, _ attribute: CFString) -> String? {
   return value as? String
 }
 
+func elementValue(_ element: AXUIElement, _ attribute: CFString) -> AXUIElement? {
+  var value: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+        let object = value, CFGetTypeID(object) == AXUIElementGetTypeID() else {
+    return nil
+  }
+  return (object as! AXUIElement)
+}
+
+func childElements(_ element: AXUIElement) -> [AXUIElement] {
+  for attribute in [kAXChildrenAttribute as CFString, "AXContents" as CFString] {
+    var value: CFTypeRef?
+    if AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+       let children = value as? [AXUIElement], !children.isEmpty { return children }
+  }
+  return []
+}
+
 func candidateWindows(_ appElement: AXUIElement) -> [AXUIElement] {
   var result = [AXUIElement]()
   for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
-    var value: CFTypeRef?
-    if AXUIElementCopyAttributeValue(appElement, attribute as CFString, &value) == .success,
-       let value, CFGetTypeID(value) == AXUIElementGetTypeID() {
-      let window = value as! AXUIElement
-      if !result.contains(where: { CFEqual($0, window) }) { result.append(window) }
+    if let window = elementValue(appElement, attribute as CFString),
+       !result.contains(where: { CFEqual($0, window) }) {
+      result.append(window)
     }
   }
   var value: CFTypeRef?
@@ -85,60 +117,182 @@ func candidateWindows(_ appElement: AXUIElement) -> [AXUIElement] {
   return result
 }
 
-struct InterfaceSnapshot {
-  var labels = [String]()
-  var readable = false
-  var incomplete = false
+let textRoles: Set<String> = ["AXTextArea", "AXTextField"]
+// Text nodes are leaves for status monitoring, even if they expose spans.
+let leafRoles: Set<String> = ["AXStaticText", "AXTextArea", "AXTextField"]
+let controlRoles: Set<String> = [
+  "AXButton", "AXCheckBox", "AXRadioButton", "AXMenuItem", "AXTab", "AXProgressIndicator", "AXPopUpButton", "AXMenuButton",
+]
+
+func isSendLabel(_ label: String) -> Bool {
+  label == "send" || label.hasPrefix("send ") || ["submit message", "start task"].contains(label)
 }
 
-// The web surface can be deeper than a large sidebar or a separate utility
-// window. Traverse roles first and avoid copying message/composer values.
-func scanTree<Node>(root: Node, maxNodes: Int = 2_000,
-                    children: (Node) -> [Node], inspect: (Node) -> (String, [String]),
+func isStopLabel(_ label: String) -> Bool {
+  // Dictation and sharing controls also say "Stop"; they are not Claude replying.
+  guard !["record", "dictat", "voice", "listen", "shar", "audio"].contains(where: { label.contains($0) }) else {
+    return false
+  }
+  return label == "stop" || label.hasPrefix("stop ") || label == "interrupt"
+    || ["cancel response", "cancel generation", "cancel task", "generating response"].contains(where: { label.hasPrefix($0) })
+}
+
+func isAttentionLabel(_ label: String) -> Bool {
+  ["approve", "allow", "deny", "always allow", "allow always"].contains(label)
+    || label.hasPrefix("approve ")
+    || ["allow once", "allow for this", "needs attention", "attention required", "review required", "requires approval",
+        "needs your approval", "waiting for approval", "permission required"].contains(where: { label.contains($0) })
+}
+
+func isFailureLabel(_ label: String) -> Bool {
+  ["generation failed", "response failed", "something went wrong", "error occurred", "message failed", "failed to send"]
+    .contains(where: { label.contains($0) })
+}
+
+func isStoppedLabel(_ label: String) -> Bool {
+  ["generation stopped", "response stopped", "response was interrupted", "response interrupted"]
+    .contains(where: { label.contains($0) })
+}
+
+struct NodeInfo {
+  var role: String
+  var labels = [String]()
+  var selected = false
+}
+
+struct InterfaceSnapshot {
+  var labels = [String]()
+  var selectedLabels = [String]()
+  var readable = false
+  var incomplete = false
+  var hasComposer = false
+  var hasSendControl = false
+  var hasStopControl = false
+  var visited = 0
+
+  // Claude shows Send or Stop beside its composer, so finding either means the
+  // scan reached the part of the window that carries the reply status.
+  var hasComposerControls: Bool { hasSendControl || hasStopControl }
+
+  mutating func record(_ info: NodeInfo) {
+    visited += 1
+    hasComposer = hasComposer || textRoles.contains(info.role)
+    readable = readable || info.role == "AXWebArea"
+    labels.append(contentsOf: info.labels)
+    if info.selected { selectedLabels.append(contentsOf: info.labels) }
+    hasSendControl = hasSendControl || info.labels.contains(where: isSendLabel)
+    hasStopControl = hasStopControl || info.labels.contains(where: isStopLabel)
+  }
+
+  mutating func merge(_ other: InterfaceSnapshot) {
+    labels.append(contentsOf: other.labels)
+    selectedLabels.append(contentsOf: other.selectedLabels)
+    readable = readable || other.readable
+    hasComposer = hasComposer || other.hasComposer
+    hasSendControl = hasSendControl || other.hasSendControl
+    hasStopControl = hasStopControl || other.hasStopControl
+    visited += other.visited
+  }
+
+  mutating func finish() {
+    readable = readable || (hasComposer && hasComposerControls)
+  }
+}
+
+// A long conversation or sidebar can hold thousands of nodes, while Claude's
+// composer, Send/Stop button, and newest message sit at the end of the window.
+// Walk depth-first from the last child so those are reached before the budget
+// runs out, then stop shortly after the composer controls are found.
+func scanTree<Node>(root: Node, maxNodes: Int = 3_000, extraNodesAfterControls: Int = 400,
+                    children: (Node) -> [Node], inspect: (Node) -> NodeInfo,
                     shouldContinue: () -> Bool = { true }) -> InterfaceSnapshot {
   var snapshot = InterfaceSnapshot()
-  var queue = [root]
-  var index = 0
-  var hasComposer = false
-  while index < queue.count && index < maxNodes && shouldContinue() {
-    let node = queue[index]
-    index += 1
-    let (role, labels) = inspect(node)
-    hasComposer = hasComposer || role == "AXTextArea" || role == "AXTextField"
-    snapshot.readable = snapshot.readable || role == "AXWebArea"
-    snapshot.labels.append(contentsOf: labels)
-    // Text nodes are leaves for status monitoring, even if they expose spans.
-    if !["AXStaticText", "AXTextArea", "AXTextField"].contains(role) {
-      queue.append(contentsOf: children(node))
-    }
+  var stack = [root]
+  var controlsFoundAt: Int?
+  while let node = stack.popLast() {
+    let info = inspect(node)
+    snapshot.record(info)
+    if controlsFoundAt == nil && snapshot.hasComposerControls { controlsFoundAt = snapshot.visited }
+    if !leafRoles.contains(info.role) { stack.append(contentsOf: children(node)) }
+    if snapshot.visited >= maxNodes || !shouldContinue() { break }
+    if let found = controlsFoundAt, snapshot.visited >= found + extraNodesAfterControls { break }
   }
-  let hasSendControl = snapshot.labels.contains { ["send", "send message", "send prompt"].contains($0) }
-  snapshot.readable = snapshot.readable || (hasComposer && hasSendControl)
-  snapshot.incomplete = index < queue.count
+  snapshot.incomplete = !stack.isEmpty && !snapshot.hasComposerControls
+  snapshot.finish()
   return snapshot
 }
 
-func visibleInterface(in root: AXUIElement) -> InterfaceSnapshot {
-  let deadline = Date().addingTimeInterval(1.5)
-  return scanTree(root: root, children: { element in
-    for attribute in [kAXChildrenAttribute as CFString, "AXContents" as CFString] {
-      var value: CFTypeRef?
-      if AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
-         let children = value as? [AXUIElement], !children.isEmpty { return children }
+// When the whole-window scan is inconclusive, start at the focused composer
+// and widen one ancestor at a time until the Send/Stop control beside it shows up.
+func scanAround<Node>(start: Node, maxLevels: Int = 8, maxNodes: Int = 600,
+                      parent: (Node) -> Node?, children: (Node) -> [Node], inspect: (Node) -> NodeInfo,
+                      same: (Node, Node) -> Bool, shouldContinue: () -> Bool = { true }) -> InterfaceSnapshot {
+  var snapshot = InterfaceSnapshot()
+  snapshot.record(inspect(start))
+  var current = start
+  for _ in 0..<maxLevels {
+    guard !snapshot.hasComposerControls, snapshot.visited < maxNodes, shouldContinue(),
+          let next = parent(current) else { break }
+    snapshot.record(inspect(next))
+    for sibling in children(next).reversed() where !same(sibling, current) {
+      let budget = maxNodes - snapshot.visited
+      guard budget > 0, !snapshot.hasComposerControls else { break }
+      snapshot.merge(scanTree(root: sibling, maxNodes: budget, extraNodesAfterControls: 40,
+                              children: children, inspect: inspect, shouldContinue: shouldContinue))
     }
-    return []
-  }, inspect: { element in
-    let role = stringValue(element, kAXRoleAttribute as CFString) ?? ""
-    let controls = ["AXButton", "AXCheckBox", "AXRadioButton", "AXMenuItem", "AXTab", "AXProgressIndicator"]
-    guard controls.contains(role) else { return (role, []) }
-    let attributes = [kAXTitleAttribute as CFString, kAXDescriptionAttribute as CFString, "AXIdentifier" as CFString]
-    let labels = attributes.compactMap { stringValue(element, $0)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-    return (role, labels.filter { !$0.isEmpty })
-  }, shouldContinue: { Date() < deadline })
+    current = next
+  }
+  snapshot.incomplete = !snapshot.hasComposerControls
+  snapshot.finish()
+  return snapshot
 }
 
-func sourceFor(labels: [String]) -> String {
-  labels.contains(where: { $0.contains("cowork") }) ? "cowork" : "chat"
+func isSelected(_ element: AXUIElement, role: String) -> Bool {
+  guard ["AXRadioButton", "AXTab", "AXCheckBox"].contains(role) else { return false }
+  var value: CFTypeRef?
+  if AXUIElementCopyAttributeValue(element, kAXSelectedAttribute as CFString, &value) == .success,
+     let selected = value as? Bool, selected {
+    return true
+  }
+  value = nil
+  // Chromium reports a selected tab or pressed toggle as the value 1.
+  guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
+        let number = value as? NSNumber else {
+    return false
+  }
+  return number.intValue == 1
+}
+
+// Read roles and control labels only; message and composer values are never copied.
+func inspectElement(_ element: AXUIElement) -> NodeInfo {
+  let role = stringValue(element, kAXRoleAttribute as CFString) ?? ""
+  guard controlRoles.contains(role) else { return NodeInfo(role: role) }
+  let attributes = [kAXTitleAttribute as CFString, kAXDescriptionAttribute as CFString, "AXIdentifier" as CFString]
+  let labels = attributes.compactMap { stringValue(element, $0)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+  return NodeInfo(role: role, labels: labels.filter { !$0.isEmpty }, selected: isSelected(element, role: role))
+}
+
+func visibleInterface(in root: AXUIElement, shouldContinue: () -> Bool) -> InterfaceSnapshot {
+  scanTree(root: root, children: childElements, inspect: inspectElement, shouldContinue: shouldContinue)
+}
+
+func composerSurroundings(in appElement: AXUIElement) -> InterfaceSnapshot? {
+  guard let focused = elementValue(appElement, kAXFocusedUIElementAttribute as CFString),
+        textRoles.contains(stringValue(focused, kAXRoleAttribute as CFString) ?? "") else {
+    return nil
+  }
+  let deadline = Date().addingTimeInterval(0.6)
+  return scanAround(start: focused, parent: { elementValue($0, kAXParentAttribute as CFString) },
+                    children: childElements, inspect: inspectElement, same: { CFEqual($0, $1) },
+                    shouldContinue: { Date() < deadline })
+}
+
+func sourceFor(selectedLabels: [String], fallback: String) -> String {
+  // Claude Desktop always shows its Chat/Cowork/Code switcher, so only the
+  // selected mode says which one is active.
+  if selectedLabels.contains(where: { $0 == "cowork" || $0.hasPrefix("cowork ") }) { return "cowork" }
+  if selectedLabels.contains(where: { $0 == "chat" || $0.hasPrefix("chat ") }) { return "chat" }
+  return fallback
 }
 
 func sessionFrom(title: String?) -> String? {
@@ -149,38 +303,22 @@ func sessionFrom(title: String?) -> String? {
   return genericTitles.contains(title.lowercased()) ? nil : title
 }
 
-func directStatus(from labels: [String]) -> String {
-  let joined = labels.joined(separator: " ")
-  let hasExactStop = labels.contains { ["stop", "stop response", "stop generating", "stop responding"].contains($0) }
-  let workSignals = [
-    "stop generating", "stop responding", "stop response", "cancel response", "cancel generation", "cancel task",
-    "generating response", "thinking", "working",
-  ]
-  if hasExactStop || workSignals.contains(where: { joined.contains($0) }) {
-    return "working"
-  }
-  if ["needs attention", "attention required", "approve", "review required"].contains(where: { joined.contains($0) }) {
-    return "attention_needed"
-  }
-  if ["generation failed", "response failed", "something went wrong", "error occurred"].contains(where: { joined.contains($0) }) {
-    return "failed"
-  }
-  if ["generation stopped", "response stopped", "cancelled"].contains(where: { joined.contains($0) }) {
-    return "stopped"
-  }
-  return "idle"
+// Returns nil when the scan never reached the composer, so a partial read
+// cannot be mistaken for Claude finishing its reply.
+func directStatus(from snapshot: InterfaceSnapshot) -> String? {
+  if snapshot.hasStopControl { return "working" }
+  if snapshot.labels.contains(where: isAttentionLabel) { return "attention_needed" }
+  if snapshot.labels.contains(where: isFailureLabel) { return "failed" }
+  if snapshot.labels.contains(where: isStoppedLabel) { return "stopped" }
+  return snapshot.hasSendControl ? "idle" : nil
 }
 
 func focusedComposerFingerprint(in appElement: AXUIElement) -> Int? {
-  var focusedValue: CFTypeRef?
-  guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
-        let focusedValue else {
+  guard let focusedElement = elementValue(appElement, kAXFocusedUIElementAttribute as CFString) else {
     return nil
   }
-
-  let focusedElement = focusedValue as! AXUIElement
   let role = stringValue(focusedElement, kAXRoleAttribute as CFString) ?? ""
-  guard role == (kAXTextAreaRole as String) || role == (kAXTextFieldRole as String),
+  guard textRoles.contains(role),
         let text = stringValue(focusedElement, kAXValueAttribute as CFString)?
           .trimmingCharacters(in: .whitespacesAndNewlines),
         !text.isEmpty else {
@@ -211,9 +349,22 @@ func composerIsActive(in appElement: AXUIElement, trackerKey: String) -> Bool {
   return Date().timeIntervalSince(lastChange) < 3
 }
 
-func transitionStatus(_ observed: String, trackerKey: String) -> String {
+func transitionStatus(_ observed: String?, trackerKey: String) -> String {
   var tracker = trackers[trackerKey] ?? SessionTracker()
   defer { trackers[trackerKey] = tracker }
+
+  guard let observed else {
+    guard tracker.sawWorking else { return "idle" }
+    // Keep a reply alive through a few partial scans, but do not celebrate a
+    // completion that was never seen.
+    tracker.inconclusivePolls += 1
+    if tracker.inconclusivePolls >= 6 {
+      tracker = SessionTracker(composerFingerprint: tracker.composerFingerprint, lastComposerChange: tracker.lastComposerChange)
+      return "idle"
+    }
+    return "working"
+  }
+  tracker.inconclusivePolls = 0
 
   if observed == "working" {
     tracker.sawWorking = true
@@ -244,6 +395,13 @@ func resetTracker(_ key: String) {
   trackers[key] = SessionTracker()
 }
 
+func pruneClaudeCodeSessions(at date: Date = Date()) {
+  for (session, lastEvent) in claudeCodeActiveSessions where date.timeIntervalSince(lastEvent) >= claudeCodeSessionTimeout {
+    claudeCodeActiveSessions.removeValue(forKey: session)
+    emit("claude_code", session == "unknown" ? nil : session, "idle")
+  }
+}
+
 func pollClaudeCodeHooks() -> Bool {
   let eventsURL = claudeCodeEventsURL
   guard let attributes = try? FileManager.default.attributesOfItem(atPath: eventsURL.path),
@@ -269,8 +427,15 @@ func pollClaudeCodeHooks() -> Bool {
   for line in raw.split(whereSeparator: { $0.isNewline }).map(String.init) {
     if let eventData = line.data(using: .utf8), let event = try? JSONDecoder().decode(ClaudeEvent.self, from: eventData) {
       let session = event.session ?? "unknown"
-      if event.status == "working" { claudeCodeWorkingSessions.insert(session) }
-      if ["completed", "failed", "stopped"].contains(event.status) { claudeCodeWorkingSessions.remove(session) }
+      switch event.status {
+      case "working", "attention_needed":
+        claudeCodeActiveSessions[session] = Date()
+      case "reply":
+        // A late streamed-text hook must not revive a turn that already stopped.
+        if claudeCodeActiveSessions[session] != nil { claudeCodeActiveSessions[session] = Date() }
+      default:
+        claudeCodeActiveSessions.removeValue(forKey: session)
+      }
       lastClaudeCodeEventAt = Date()
       emit(event.source, event.session, event.status, event.preview)
     } else if ["working", "completed", "reply", "failed", "attention_needed", "stopped"].contains(line) {
@@ -282,13 +447,14 @@ func pollClaudeCodeHooks() -> Bool {
   claudeCodeEventOffset = 0
   return true
 }
-func pollAccessibility(for bundleID: String) -> Bool {
-  let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleID }
-  guard let app = apps.first else {
-    return false
+
+func observeDesktop(bundleID: String) -> DesktopObservation? {
+  guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) else {
+    return nil
   }
 
   let trackerKey = bundleID
+  let defaultSource = bundleID == "com.anthropic.claude-cowork" ? "cowork" : "chat"
   let appElement = AXUIElementCreateApplication(app.processIdentifier)
   AXUIElementSetMessagingTimeout(appElement, 0.3)
   // Enable the documented Electron accessibility mode before inspecting windows.
@@ -296,40 +462,64 @@ func pollAccessibility(for bundleID: String) -> Bool {
   let windows = candidateWindows(appElement)
   guard !windows.isEmpty else {
     resetTracker(trackerKey)
-    emit(bundleID == "com.anthropic.claude-cowork" ? "cowork" : "chat", nil, "unavailable", reason: "window_unavailable")
-    return true
+    return DesktopObservation(source: defaultSource, session: nil, status: "unavailable", reason: "window_unavailable")
   }
-  var readableWindow: AXUIElement?
-  var labels = [String]()
+
+  let deadline = Date().addingTimeInterval(2)
+  let inTime = { Date() < deadline }
+  var chosen: (window: AXUIElement, snapshot: InterfaceSnapshot)?
   var incomplete = false
-  for window in windows.prefix(6) {
-    let snapshot = visibleInterface(in: window)
+  for window in windows.prefix(6) where inTime() {
+    let snapshot = visibleInterface(in: window, shouldContinue: inTime)
     incomplete = incomplete || snapshot.incomplete
-    if snapshot.readable {
-      readableWindow = window
-      labels = snapshot.labels
+    if snapshot.hasComposerControls {
+      chosen = (window, snapshot)
       break
     }
+    if snapshot.readable && chosen == nil { chosen = (window, snapshot) }
   }
-  guard let window = readableWindow else {
+  if chosen?.snapshot.hasComposerControls != true,
+     let nearby = composerSurroundings(in: appElement), nearby.hasComposerControls {
+    chosen = (chosen?.window ?? windows[0], nearby)
+  }
+
+  guard let reading = chosen else {
+    if incomplete && trackers[trackerKey]?.sawWorking == true {
+      return DesktopObservation(source: defaultSource, session: nil,
+                                status: transitionStatus(nil, trackerKey: trackerKey), reason: nil)
+    }
     resetTracker(trackerKey)
     let reason = incomplete ? "interface_scanning" : activation == .cannotComplete ? "interface_unresponsive" : "interface_unavailable"
-    emit("chat", nil, "unavailable", reason: reason)
-    return true
+    return DesktopObservation(source: defaultSource, session: nil, status: "unavailable", reason: reason)
   }
-  let title = stringValue(window, kAXTitleAttribute as CFString)
-  let source = sourceFor(labels: labels)
-  let observedStatus = directStatus(from: labels)
-  let transitioned = transitionStatus(observedStatus, trackerKey: trackerKey)
+
+  let transitioned = transitionStatus(directStatus(from: reading.snapshot), trackerKey: trackerKey)
   let status = transitioned == "idle" && composerIsActive(in: appElement, trackerKey: trackerKey)
     ? "message" : transitioned
   // Desktop monitoring remains status-only; previews are opt-in Code hooks.
-  emit(source, sessionFrom(title: title), status)
-  return true
+  return DesktopObservation(source: sourceFor(selectedLabels: reading.snapshot.selectedLabels, fallback: defaultSource),
+                            session: sessionFrom(title: stringValue(reading.window, kAXTitleAttribute as CFString)),
+                            status: status, reason: nil)
+}
+
+func hookObject(from input: Data) -> [String: Any]? {
+  (try? JSONSerialization.jsonObject(with: input)) as? [String: Any]
+}
+
+// Claude Code routes every notification through one hook. Only prompts that
+// wait on the user need attention; the idle reminder means the turn is over.
+func hookStatus(_ requested: String, input: Data) -> String? {
+  guard requested == "attention_needed" else { return requested }
+  let object = hookObject(from: input)
+  let type = (object?["notification_type"] as? String) ?? (object?["type"] as? String) ?? ""
+  if ["", "permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input"].contains(type) {
+    return "attention_needed"
+  }
+  return type == "idle_prompt" ? "idle" : nil
 }
 
 func hookPreview(from input: Data, includeContent: Bool) -> (String?, String?) {
-  guard let object = try? JSONSerialization.jsonObject(with: input) as? [String: Any] else { return (nil, nil) }
+  guard let object = hookObject(from: input) else { return (nil, nil) }
   let session = object["session_id"] as? String
   guard includeContent else { return (session, nil) }
   for key in ["prompt", "last_assistant_message", "delta", "message", "text", "content"] {
@@ -338,8 +528,9 @@ func hookPreview(from input: Data, includeContent: Bool) -> (String?, String?) {
   return (session, nil)
 }
 
-func appendClaudeCodeHook(status: String, includeContent: Bool) {
+func appendClaudeCodeHook(status requested: String, includeContent: Bool) {
   let input = FileHandle.standardInput.readDataToEndOfFile()
+  guard let status = hookStatus(requested, input: input) else { return }
   let (session, preview) = hookPreview(from: input, includeContent: includeContent)
   let event = ClaudeEvent(source: "claude_code", session: session, status: status, timestamp: now(), preview: preview, reason: nil)
   guard let encoded = try? JSONEncoder().encode(event) else { return }
@@ -362,27 +553,73 @@ if args.contains("--self-test") {
   try FileManager.default.createDirectory(at: testDir, withIntermediateDirectories: true)
   defer { try? FileManager.default.removeItem(at: testDir) }
   claudeCodeEventsURL = testDir.appendingPathComponent("events")
-  let deep = scanTree(root: 0, children: { $0 < 300 ? [$0 + 1] : [] }, inspect: { ($0 == 300 ? "AXWebArea" : "AXGroup", []) })
+  func buttons(_ labels: [String]) -> InterfaceSnapshot {
+    var snapshot = InterfaceSnapshot()
+    snapshot.record(NodeInfo(role: "AXButton", labels: labels))
+    snapshot.finish()
+    return snapshot
+  }
+  let deep = scanTree(root: 0, children: { $0 < 300 ? [$0 + 1] : [] }, inspect: { NodeInfo(role: $0 == 300 ? "AXWebArea" : "AXGroup") })
   precondition(deep.readable, "Web surfaces beyond the old 180-node limit must be found")
-  let nativeComposer = scanTree(root: 0, children: { $0 == 0 ? [1, 2] : [] }, inspect: { $0 == 1 ? ("AXTextArea", []) : $0 == 2 ? ("AXButton", ["send message"]) : ("AXGroup", []) })
+  let nativeComposer = scanTree(root: 0, children: { $0 == 0 ? [1, 2] : [] }, inspect: {
+    $0 == 1 ? NodeInfo(role: "AXTextArea") : $0 == 2 ? NodeInfo(role: "AXButton", labels: ["send message"]) : NodeInfo(role: "AXGroup")
+  })
   precondition(nativeComposer.readable, "A usable composer and send button must work without an AXWebArea wrapper")
-  let bounded = scanTree(root: 0, maxNodes: 180, children: { [$0 + 1] }, inspect: { _ in ("AXGroup", []) })
+  let bounded = scanTree(root: 0, maxNodes: 180, children: { [$0 + 1] }, inspect: { _ in NodeInfo(role: "AXGroup") })
   precondition(bounded.incomplete && !bounded.readable, "A truncated tree must not be reported as definitively unreadable")
-  let content = scanTree(root: 0, children: { _ in [1] }, inspect: { _ in ("AXTextArea", []) })
+  let content = scanTree(root: 0, children: { _ in [1] }, inspect: { _ in NodeInfo(role: "AXTextArea") })
   precondition(!content.incomplete && !content.readable, "Text content must not be traversed for status detection")
+  // Node 1 is an endless conversation; node 2 is the composer that follows it.
+  let longChat = scanTree(root: 0, maxNodes: 200, children: { node -> [Int] in
+    if node == 0 { return [1, 2] }
+    if node == 2 { return [3, 4] }
+    return node == 1 || node >= 10 ? [max(node, 9) + 1] : []
+  }, inspect: {
+    $0 == 3 ? NodeInfo(role: "AXTextArea") : $0 == 4 ? NodeInfo(role: "AXButton", labels: ["stop response"]) : NodeInfo(role: "AXGroup")
+  })
+  precondition(directStatus(from: longChat) == "working", "The composer after a long conversation must be read within budget")
+  let tree = [0: [1, 2], 1: [3, 4], 2: [5]]
+  let parents = [1: 0, 2: 0, 3: 1, 4: 1, 5: 2]
+  let around = scanAround(start: 3, parent: { parents[$0] }, children: { tree[$0] ?? [] }, inspect: {
+    $0 == 3 ? NodeInfo(role: "AXTextArea") : $0 == 5 ? NodeInfo(role: "AXButton", labels: ["send message"]) : NodeInfo(role: "AXGroup")
+  }, same: { $0 == $1 })
+  precondition(around.readable && directStatus(from: around) == "idle", "The focused composer must lead to its Send control")
+  precondition(directStatus(from: buttons(["extended thinking", "send message"])) == "idle", "Composer options must not look like work")
+  precondition(directStatus(from: buttons(["stop response"])) == "working")
+  precondition(directStatus(from: buttons(["stop recording", "send message"])) == "idle", "Dictation must not look like a reply")
+  precondition(directStatus(from: buttons(["allow once", "send message"])) == "attention_needed")
+  precondition(directStatus(from: buttons(["new chat"])) == nil, "A scan without the composer must be inconclusive")
+  precondition(sourceFor(selectedLabels: ["cowork"], fallback: "chat") == "cowork")
+  precondition(sourceFor(selectedLabels: [], fallback: "chat") == "chat", "An unselected Cowork tab must not relabel Chat")
   precondition(transitionStatus("working", trackerKey: "test") == "working")
   precondition(transitionStatus("idle", trackerKey: "test") == "working")
   precondition(transitionStatus("idle", trackerKey: "test") == "completed")
   precondition(transitionStatus("idle", trackerKey: "test") == "idle")
+  precondition(transitionStatus("working", trackerKey: "partial") == "working")
+  for _ in 0..<5 {
+    precondition(transitionStatus(nil, trackerKey: "partial") == "working", "A partial scan must not end a reply")
+  }
+  precondition(transitionStatus(nil, trackerKey: "partial") == "idle", "A reply that stays unreadable must not stay working")
   precondition(!pollClaudeCodeHooks(), "No queue should mean no event")
   let prompt = ClaudeEvent(source: "claude_code", session: "test", status: "working", timestamp: now(), preview: nil, reason: nil)
   try (JSONEncoder().encode(prompt) + Data("\n".utf8)).write(to: claudeCodeEventsURL)
   precondition(pollClaudeCodeHooks(), "The first live queue must be read")
-  precondition(claudeCodeWorkingSessions.contains("test"), "The first prompt must not be discarded")
+  precondition(claudeCodeActiveSessions["test"] != nil, "The first prompt must not be discarded")
   let stop = ClaudeEvent(source: "claude_code", session: "test", status: "completed", timestamp: now(), preview: nil, reason: nil)
   try (JSONEncoder().encode(stop) + Data("\n".utf8)).write(to: claudeCodeEventsURL)
   _ = pollClaudeCodeHooks()
-  precondition(claudeCodeWorkingSessions.isEmpty, "Stop must clear the working session")
+  precondition(claudeCodeActiveSessions.isEmpty, "Stop must clear the working session")
+  let lateReply = ClaudeEvent(source: "claude_code", session: "test", status: "reply", timestamp: now(), preview: nil, reason: nil)
+  try (JSONEncoder().encode(lateReply) + Data("\n".utf8)).write(to: claudeCodeEventsURL)
+  _ = pollClaudeCodeHooks()
+  precondition(claudeCodeActiveSessions.isEmpty, "A late reply hook must not revive a finished turn")
+  claudeCodeActiveSessions["interrupted"] = Date().addingTimeInterval(-claudeCodeSessionTimeout - 1)
+  pruneClaudeCodeSessions()
+  precondition(claudeCodeActiveSessions.isEmpty, "An interrupted Claude Code turn must not block Desktop monitoring forever")
+  precondition(hookStatus("attention_needed", input: Data(#"{"notification_type":"idle_prompt"}"#.utf8)) == "idle")
+  precondition(hookStatus("attention_needed", input: Data(#"{"notification_type":"permission_prompt"}"#.utf8)) == "attention_needed")
+  precondition(hookStatus("attention_needed", input: Data(#"{"notification_type":"auth_success"}"#.utf8)) == nil)
+  precondition(hookStatus("completed", input: Data()) == "completed")
   let input = Data(#"{"session_id":"test","last_assistant_message":"Final reply"}"#.utf8)
   precondition(hookPreview(from: input, includeContent: true).1 == "Final reply", "Stop must read the documented reply field")
   precondition(hookPreview(from: input, includeContent: false).0 == "test", "Status-only hooks must retain session identity")
@@ -406,7 +643,19 @@ if args.contains("--connection-status") {
   }
   var found = false
   for bundleID in supportedApps {
-    found = pollAccessibility(for: bundleID) || found
+    var observation = observeDesktop(bundleID: bundleID)
+    var attempts = 0
+    // Electron builds its accessibility tree asynchronously once
+    // AXManualAccessibility is enabled, so the first read can be empty.
+    while attempts < 4, observation?.status == "unavailable", observation?.reason?.hasPrefix("interface_") == true {
+      attempts += 1
+      Thread.sleep(forTimeInterval: 0.6)
+      observation = observeDesktop(bundleID: bundleID)
+    }
+    if let observation {
+      emit(observation)
+      found = true
+    }
   }
   if !found { emit("system", nil, "unavailable", reason: "claude_not_running") }
   exit(0)
@@ -431,24 +680,27 @@ if let attributes = try? FileManager.default.attributesOfItem(atPath: existingEv
 
 while true {
   let hasClaudeCodeHooks = pollClaudeCodeHooks() || claudeCodeHooksAvailable
-  // Desktop permission or idle polling must not erase live Claude Code work.
-  if !claudeCodeWorkingSessions.isEmpty || (lastClaudeCodeEventAt.map { Date().timeIntervalSince($0) < 4 } ?? false) {
-    Thread.sleep(forTimeInterval: 1.2)
-    continue
-  }
+  pruneClaudeCodeSessions()
+  // Live Claude Code work must not be erased by an idle Desktop, but Desktop
+  // activity is still reported so Chat keeps syncing while Code is open.
+  let claudeCodeHoldsStatus = !claudeCodeActiveSessions.isEmpty
+    || (lastClaudeCodeEventAt.map { Date().timeIntervalSince($0) < 4 } ?? false)
   guard isAccessibilityTrusted() else {
-    emit("system", nil, "unavailable", reason: "permission_denied")
+    if !claudeCodeHoldsStatus { emit("system", nil, "unavailable", reason: "permission_denied") }
     Thread.sleep(forTimeInterval: 1.2)
     continue
   }
 
   var observedApp = false
   for bundleID in supportedApps {
-    observedApp = pollAccessibility(for: bundleID) || observedApp
+    guard let observation = observeDesktop(bundleID: bundleID) else { continue }
+    observedApp = true
+    if claudeCodeHoldsStatus && ["idle", "unavailable"].contains(observation.status) { continue }
+    emit(observation)
   }
   if !observedApp && !hasClaudeCodeHooks {
     trackers.removeAll()
     emit("system", nil, "unavailable", reason: "claude_not_running")
   }
-  Thread.sleep(forTimeInterval: 1.2)
+  Thread.sleep(forTimeInterval: 1)
 }

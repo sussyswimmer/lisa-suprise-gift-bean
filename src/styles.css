@@ -67,10 +67,32 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 .bean-shell:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 .bean-stage { width: 132px; height: 132px; position: relative; display: grid; place-items: center; }
-.bean-image { width: 128px; height: 128px; object-fit: contain; image-rendering: pixelated; -webkit-user-drag: none; }
+.bean-facing { position: relative; width: 128px; height: 128px; display: grid; place-items: center; }
+.bean-art { width: 128px; height: 128px; object-fit: contain; background-repeat: no-repeat; image-rendering: pixelated; -webkit-user-drag: none; }
+/* Sheets drawn facing right are mirrored so every motion below can assume Bean faces left. */
+.faces-right .bean-art { scale: -1 1; }
 .idle-activity-peek { animation: idle-peek 2.3s var(--ease) both; }
 .idle-activity-hop { animation: idle-hop .9s var(--ease) both; }
 .idle-activity-boba { animation: idle-boba 4.1s var(--ease) both; }
+.idle-activity-zoomies { animation: zoomies-path 3.6s cubic-bezier(.45, 0, .55, 1) both; }
+.idle-activity-zoomies .bean-facing { animation: zoomies-facing 3.6s steps(1, end) both; }
+.idle-activity-patrol { animation: patrol-path 6.2s ease-in-out both; }
+.idle-activity-patrol .bean-facing { animation: patrol-facing 6.2s steps(1, end) both; }
+.idle-activity-arrive { animation: arrive-path 1.1s cubic-bezier(.2, .7, .3, 1) both; }
+.idle-activity-arrive .bean-facing { animation: arrive-facing 1.1s steps(1, end) both; }
+.idle-activity-chase { animation: chase-path 2s linear both; }
+.idle-activity-chase .bean-facing { animation: chase-facing .5s steps(1, end) 4; }
+.idle-activity-stretch .bean-art { transform-origin: 50% 100%; animation: stretch 2.6s var(--ease) both; }
+.idle-activity-sniff .bean-art { transform-origin: 30% 90%; animation: sniff 2.4s ease-in-out both; }
+.is-moving .bean-art { animation: run-bob .3s ease-in-out infinite; }
+.idle-activity-patrol .bean-art { animation-duration: .52s; }
+/* Sprite sheets already move their legs, so they only need a small bounce. */
+.is-moving .bean-art.is-sprite { animation-name: sprite-bob; }
+.dust-pixels { position: absolute; right: 26px; bottom: 12px; width: 0; height: 0; }
+.dust-pixels i { position: absolute; width: 5px; height: 5px; background: #ecdcc4; box-shadow: 0 0 0 1px rgba(122, 88, 56, .35); animation: dust .6s steps(3, end) infinite; }
+.dust-pixels i:nth-child(2) { left: 8px; bottom: 5px; animation-delay: .2s; }
+.dust-pixels i:nth-child(3) { left: -5px; bottom: 8px; animation-delay: .4s; }
+.chase-swirl { position: absolute; bottom: 8px; left: 50%; width: 92px; height: 20px; margin-left: -46px; border: 2px dashed rgba(36, 59, 104, .35); border-radius: 50%; animation: swirl .5s linear infinite; }
 .boba-cup { position: absolute; right: 2px; bottom: 19px; width: 20px; height: 25px; overflow: hidden; border: 2px solid #243b68; border-radius: 3px 3px 7px 7px; background: linear-gradient(#d8a675 0 38%, #9b684c 39%); box-shadow: 2px 2px 0 rgba(35, 58, 98, .16); transform: rotate(8deg); }
 .boba-cup::before { position: absolute; top: -12px; left: 9px; width: 3px; height: 16px; border: 1.5px solid #243b68; border-radius: 2px; background: #e9b75b; content: ""; transform: rotate(-12deg); transform-origin: bottom; }
 .boba-cup i { position: absolute; top: 8px; right: 0; left: 0; height: 2px; background: #f5dcc2; }
@@ -165,6 +187,9 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 .accessibility-check:hover { background: #3f659f; }
 .accessibility-check:active { box-shadow: none; transform: translateY(2px); }
 .accessibility-check:disabled { cursor: wait; opacity: .7; }
+.accessibility-reset { width: 100%; margin-top: 6px; padding: 4px; border: 0; color: #4d71b2; background: transparent; font: 700 9px/11px "Courier New", monospace; text-decoration: underline; cursor: pointer; }
+.accessibility-reset:disabled { cursor: wait; opacity: .6; }
+.accessibility-reset:focus-visible { outline: 2px solid #4d71b2; outline-offset: 2px; }
 
 .typing-pixels, .celebration-pixels, .sleep-pixels, .attention-mark { position: absolute; pointer-events: none; font-family: "Courier New", monospace; font-weight: 900; image-rendering: pixelated; }
 .typing-pixels { right: 2px; bottom: 8px; display: flex; gap: 3px; }
@@ -177,13 +202,15 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 .celebration-pixels i:nth-child(2) { right: 7px; top: 8px; background: #75a9d6; animation-delay: .07s; }
 .celebration-pixels i:nth-child(3) { left: 19px; bottom: 9px; animation-delay: .12s; }
 .celebration-pixels i:nth-child(4) { right: 20px; bottom: 13px; background: #e58e6f; animation-delay: .04s; }
+.celebration-pixels i:nth-child(5) { left: 44px; top: 2px; background: #9fd49a; animation-delay: .18s; }
+.celebration-pixels i:nth-child(6) { right: 40px; top: 18px; background: #f3b745; animation-delay: .24s; }
 .attention-mark { top: 5px; right: 12px; color: #b94e49; font-size: 22px; text-shadow: 2px 2px 0 #fff; animation: attention-mark .5s steps(2, end) 2; }
 .sleep-pixels { top: 8px; right: 4px; color: #6a78a0; font-size: 12px; letter-spacing: 1px; animation: sleep-pixels 2.4s steps(4, end) infinite; }
 
 .bean-idle { animation: idle-breathe 2.8s var(--ease) infinite; }
 .bean-thinking { animation: typing .9s steps(2, end) infinite; }
 .bean-message { animation: message 1.3s var(--ease) 1; }
-.bean-happy { animation: happy-jump 1.15s var(--ease) both; }
+.bean-happy { animation: happy-jump 1.15s var(--ease) both, happy-wiggle 1.4s ease-in-out 1.2s infinite; }
 .bean-noticed { animation: noticed .5s steps(3, end) 2; }
 .bean-soundOff { filter: grayscale(.6); }
 .bean-sleepy { animation: sleepy-breathe 3.2s var(--ease) infinite; }
@@ -199,6 +226,8 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 .welcome-dialog button { margin: 7px 0 5px; padding: 9px 12px; border: 2px solid #243b68; border-radius: 8px; background: #4d71b2; color: white; box-shadow: 0 3px 0 #233a62; font: 700 11px "Courier New", monospace; cursor: pointer; }
 .welcome-dialog button:active { box-shadow: none; transform: translateY(3px); }
 .welcome-dialog button:disabled { cursor: wait; opacity: .65; }
+.welcome-dialog .inline-reset { margin: 0; padding: 0; border: 0; color: #4d71b2; background: none; box-shadow: none; font: 700 10px/12px "Courier New", monospace; text-decoration: underline; }
+.welcome-dialog .inline-reset:active { transform: none; }
 .connection-error { color: #a23d38 !important; font-size: 10px !important; line-height: 12px !important; }
 .welcome-dialog small { display: block; color: #617084; font-size: 9px; line-height: 11px; }
 
@@ -211,11 +240,26 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 @keyframes happy-jump { 0% { transform: translateX(-50%) translateY(0) scale(1.05, .95); } 38% { transform: translateX(-50%) translateY(-18px) scale(.92, 1.1) rotate(-3deg); } 70% { transform: translateX(-50%) translateY(0) scale(1.12, .88) rotate(2deg); } 100% { transform: translateX(-50%) translateY(0) scale(1); } }
 @keyframes noticed { 0%, 100% { transform: translateX(-50%) rotate(0); } 50% { transform: translateX(calc(-50% - 3px)) rotate(-2deg); } }
 @keyframes sleepy-breathe { 0%,100% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(.975, 1.02); } }
+@keyframes happy-wiggle { 0%, 100% { transform: translateX(-50%) rotate(0); } 25% { transform: translateX(-50%) translateY(-2px) rotate(-3deg); } 75% { transform: translateX(-50%) translateY(-2px) rotate(3deg); } }
+@keyframes zoomies-path { 0% { transform: translateX(0); } 26%, 30% { transform: translateX(58px); } 70%, 74% { transform: translateX(-58px); } 100% { transform: translateX(0); } }
+@keyframes zoomies-facing { 0% { scale: -1 1; } 28% { scale: 1 1; } 72% { scale: -1 1; } 100% { scale: 1 1; } }
+@keyframes patrol-path { 0% { transform: translateX(0); } 38%, 46% { transform: translateX(42px); } 88% { transform: translateX(-30px); } 100% { transform: translateX(0); } }
+@keyframes patrol-facing { 0% { scale: -1 1; } 42% { scale: 1 1; } 88% { scale: -1 1; } 100% { scale: 1 1; } }
+@keyframes arrive-path { 0% { transform: translateX(-74px); } 82% { transform: translateX(3px); } 100% { transform: translateX(0); } }
+@keyframes arrive-facing { 0% { scale: -1 1; } 100% { scale: 1 1; } }
+@keyframes chase-path { 0%, 100% { transform: translate(0, 0) rotate(0); } 25% { transform: translate(10px, -4px) rotate(8deg); } 50% { transform: translate(0, -7px); } 75% { transform: translate(-10px, -4px) rotate(-8deg); } }
+@keyframes chase-facing { 0% { scale: 1 1; } 50% { scale: -1 1; } }
+@keyframes run-bob { 0%, 100% { transform: translateY(0) scale(1.03, .97); } 50% { transform: translateY(-7px) scale(.97, 1.04) rotate(-2deg); } }
+@keyframes sprite-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+@keyframes stretch { 0%, 100% { transform: scale(1); } 25%, 60% { transform: translateY(6px) scale(1.12, .86) rotate(-3deg); } 75% { transform: scale(.97, 1.04); } }
+@keyframes sniff { 0%, 100% { transform: rotate(0); } 15%, 35% { transform: translateX(-3px) rotate(-7deg); } 25% { transform: translateX(-3px) rotate(-5deg); } 55%, 75% { transform: translateX(3px) rotate(5deg); } 65% { transform: translateX(3px) rotate(3deg); } }
+@keyframes dust { from { transform: translate(0, 0) scale(1); opacity: .9; } to { transform: translate(10px, -6px) scale(.4); opacity: 0; } }
+@keyframes swirl { 0%, 100% { transform: scaleX(.8); opacity: .25; } 50% { transform: scaleX(1.05); opacity: .7; } }
 @keyframes typing-pixel { 0%,100% { transform: translateY(0); opacity: .35; } 50% { transform: translateY(-5px); opacity: 1; } }
 @keyframes confetti { from { transform: translateY(-7px) rotate(0); opacity: 0; } 30% { opacity: 1; } to { transform: translateY(13px) rotate(180deg); opacity: 0; } }
 @keyframes attention-mark { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-5px) scale(1.15); } }
 @keyframes sleep-pixels { 0%,100% { transform: translate(0, 2px); opacity: .45; } 50% { transform: translate(5px, -5px); opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .bean-shell, .bean-stage, .typing-pixels i, .celebration-pixels i, .attention-mark, .sleep-pixels { animation: none !important; }
+  .bean-shell, .bean-stage, .bean-facing, .bean-art, .typing-pixels i, .celebration-pixels i, .attention-mark, .sleep-pixels, .dust-pixels i, .chase-swirl { animation: none !important; }
 }
