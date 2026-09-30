@@ -40,6 +40,7 @@ var trackers = [String: SessionTracker]()
 var claudeCodeEventOffset: UInt64 = 0
 var claudeCodeHooksAvailable = false
 struct ClaudeCodeSession {
+  var startedAt: Date
   var lastEvent: Date
   var status: String
 }
@@ -48,7 +49,16 @@ struct ClaudeCodeSession {
 // Claude Code with Esc fires no Stop hook, so entries expire instead of hiding
 // Claude Desktop activity forever.
 var claudeCodeActiveSessions = [String: ClaudeCodeSession]()
+// Sessions that just ended, so a tool result racing their Stop cannot revive them.
+var recentlyEndedClaudeCodeSessions = [String: Date]()
+// No hook says when a permission prompt was answered before the tool finishes,
+// so after this long a waiting session counts as working again.
+let claudeCodeAttentionWindow: TimeInterval = 120
+// Re-show Claude Code only after Bean has been quiet for longer than the
+// app's 6-second completion celebration, which would otherwise swallow it.
+let claudeCodeReassertDelay: TimeInterval = 7
 var lastEmitted: (source: String, session: String?, status: String)?
+var lastEmittedAt = Date.distantPast
 let claudeCodeSessionTimeout: TimeInterval = 30 * 60
 var lastClaudeCodeEventAt: Date?
 var claudeCodeEventsURL = FileManager.default.homeDirectoryForCurrentUser
@@ -68,6 +78,7 @@ func emit(_ source: String, _ session: String?, _ status: String, _ preview: Str
   print(line)
   fflush(stdout)
   lastEmitted = (source, session, status)
+  lastEmittedAt = Date()
 }
 
 func emit(_ observation: DesktopObservation) {
@@ -407,36 +418,63 @@ func pruneClaudeCodeSessions(at date: Date = Date()) {
   }
 }
 
-// A session waiting on the user outranks every session that is only working.
-func claudeCodePriority() -> (session: String, status: String)? {
-  let waiting = claudeCodeActiveSessions.filter { $0.value.status == "attention_needed" }
+func isWaitingOnUser(_ active: ClaudeCodeSession, at date: Date = Date()) -> Bool {
+  active.status == "attention_needed" && date.timeIntervalSince(active.lastEvent) < claudeCodeAttentionWindow
+}
+
+// A session waiting on the user outranks sessions that are only working.
+// Among equals, the turn that started last wins; tool results do not reorder
+// them, so parallel sessions cannot keep swapping which one Bean shows.
+func claudeCodePriority(at date: Date = Date()) -> (session: String, status: String)? {
+  let waiting = claudeCodeActiveSessions.filter { isWaitingOnUser($0.value, at: date) }
   let pool = waiting.isEmpty ? claudeCodeActiveSessions : waiting
-  guard let latest = pool.max(by: { $0.value.lastEvent < $1.value.lastEvent }) else { return nil }
-  return (latest.key, latest.value.status)
+  guard let latest = pool.max(by: { $0.value.startedAt < $1.value.startedAt }) else { return nil }
+  return (latest.key, waiting.isEmpty ? "working" : "attention_needed")
+}
+
+// Whether Bean already shows this Claude Code state. A streamed reply counts
+// as working, as does another active session in the same state.
+func claudeCodeStatusShown(_ priority: (session: String, status: String)) -> Bool {
+  guard let last = lastEmitted, last.source == "claude_code" else { return false }
+  let lastStatus = last.status == "reply" ? "working" : last.status
+  guard lastStatus == priority.status else { return false }
+  let lastSession = last.session ?? "unknown"
+  return lastSession == priority.session || claudeCodeActiveSessions[lastSession] != nil
 }
 
 // Applies one Claude Code hook event and says whether Bean should show it.
 func recordClaudeCodeEvent(session: String, status: String, at date: Date = Date()) -> String? {
+  recentlyEndedClaudeCodeSessions = recentlyEndedClaudeCodeSessions.filter { date.timeIntervalSince($0.value) < 30 }
   switch status {
-  case "working", "attention_needed":
-    claudeCodeActiveSessions[session] = ClaudeCodeSession(lastEvent: date, status: status)
+  case "working":
+    recentlyEndedClaudeCodeSessions.removeValue(forKey: session)
+    claudeCodeActiveSessions[session] = ClaudeCodeSession(startedAt: date, lastEvent: date, status: status)
+  case "attention_needed":
+    let startedAt = claudeCodeActiveSessions[session]?.startedAt ?? date
+    claudeCodeActiveSessions[session] = ClaudeCodeSession(startedAt: startedAt, lastEvent: date, status: status)
   case "heartbeat":
-    // A finished tool call keeps a long turn alive. It is only shown when it
-    // means the user just answered this session's permission prompt.
-    guard var active = claudeCodeActiveSessions[session] else { return nil }
-    let answered = active.status == "attention_needed"
-    active.lastEvent = date
-    active.status = "working"
-    claudeCodeActiveSessions[session] = active
-    if !answered { return nil }
+    // A finished tool call keeps a turn alive. It is shown only when it ends
+    // this session's permission prompt, or reveals a turn that began before
+    // this helper started.
+    if var active = claudeCodeActiveSessions[session] {
+      let answered = active.status == "attention_needed"
+      active.lastEvent = date
+      active.status = "working"
+      claudeCodeActiveSessions[session] = active
+      if !answered { return nil }
+    } else {
+      guard recentlyEndedClaudeCodeSessions[session] == nil else { return nil }
+      claudeCodeActiveSessions[session] = ClaudeCodeSession(startedAt: date, lastEvent: date, status: "working")
+    }
   case "reply":
     // A late streamed-text hook must not revive a turn that already stopped.
     claudeCodeActiveSessions[session]?.lastEvent = date
   default:
     claudeCodeActiveSessions.removeValue(forKey: session)
+    recentlyEndedClaudeCodeSessions[session] = date
   }
   let shown = status == "heartbeat" ? "working" : status
-  let otherSessionWaiting = claudeCodeActiveSessions.contains { $0.key != session && $0.value.status == "attention_needed" }
+  let otherSessionWaiting = claudeCodeActiveSessions.contains { $0.key != session && isWaitingOnUser($0.value, at: date) }
   if otherSessionWaiting && ["working", "reply"].contains(shown) { return nil }
   return shown
 }
@@ -656,8 +694,8 @@ if args.contains("--self-test") {
   try (JSONEncoder().encode(lateReply) + Data("\n".utf8)).write(to: claudeCodeEventsURL)
   _ = pollClaudeCodeHooks()
   precondition(claudeCodeActiveSessions.isEmpty, "A late reply hook must not revive a finished turn")
-  claudeCodeActiveSessions["interrupted"] = ClaudeCodeSession(lastEvent: Date().addingTimeInterval(-claudeCodeSessionTimeout - 1),
-                                                              status: "working")
+  let longAgo = Date().addingTimeInterval(-claudeCodeSessionTimeout - 1)
+  claudeCodeActiveSessions["interrupted"] = ClaudeCodeSession(startedAt: longAgo, lastEvent: longAgo, status: "working")
   pruneClaudeCodeSessions()
   precondition(claudeCodeActiveSessions.isEmpty, "An interrupted Claude Code turn must not block Desktop monitoring forever")
   precondition(recordClaudeCodeEvent(session: "a", status: "working") == "working")
@@ -667,9 +705,27 @@ if args.contains("--self-test") {
   precondition(claudeCodePriority()?.session == "a" && claudeCodePriority()?.status == "attention_needed")
   precondition(recordClaudeCodeEvent(session: "a", status: "heartbeat") == "working", "Answering a prompt resumes work")
   precondition(recordClaudeCodeEvent(session: "b", status: "completed") == "completed")
-  precondition(recordClaudeCodeEvent(session: "gone", status: "heartbeat") == nil && claudeCodeActiveSessions["gone"] == nil,
-               "A tool result after Stop must not revive a session")
+  precondition(recordClaudeCodeEvent(session: "b", status: "heartbeat") == nil && claudeCodeActiveSessions["b"] == nil,
+               "A tool result racing Stop must not revive a session")
+  precondition(recordClaudeCodeEvent(session: "early", status: "heartbeat") == "working",
+               "A turn that began before the helper must show once its tools report")
+  lastEmitted = ("claude_code", "a", "reply")
+  precondition(claudeCodeStatusShown(("a", "working")), "A streamed reply already shows the session working")
+  precondition(claudeCodeStatusShown(("early", "working")), "Another working session must not be re-shown")
   claudeCodeActiveSessions.removeAll()
+  let base = Date()
+  _ = recordClaudeCodeEvent(session: "first", status: "working", at: base)
+  _ = recordClaudeCodeEvent(session: "second", status: "working", at: base.addingTimeInterval(1))
+  _ = recordClaudeCodeEvent(session: "first", status: "heartbeat", at: base.addingTimeInterval(2))
+  precondition(claudeCodePriority(at: base.addingTimeInterval(2))?.session == "second",
+               "Tool results must not swap which working session Bean shows")
+  _ = recordClaudeCodeEvent(session: "first", status: "attention_needed", at: base.addingTimeInterval(3))
+  precondition(claudeCodePriority(at: base.addingTimeInterval(4))?.status == "attention_needed")
+  precondition(claudeCodePriority(at: base.addingTimeInterval(3 + claudeCodeAttentionWindow))?.status == "working",
+               "An unanswered-looking prompt must not claim attention forever")
+  claudeCodeActiveSessions.removeAll()
+  recentlyEndedClaudeCodeSessions.removeAll()
+  lastEmitted = nil
   precondition(hookStatus("attention_needed", input: Data(#"{"notification_type":"idle_prompt"}"#.utf8)) == "idle")
   precondition(hookStatus("attention_needed", input: Data(#"{"notification_type":"permission_prompt"}"#.utf8)) == "attention_needed")
   precondition(hookStatus("attention_needed", input: Data(#"{"notification_type":"auth_success"}"#.utf8)) == nil)
@@ -748,7 +804,6 @@ while true {
   // activity is still reported so Chat keeps syncing while Code is open.
   let claudeCodeHoldsStatus = !claudeCodeActiveSessions.isEmpty
     || (lastClaudeCodeEventAt.map { Date().timeIntervalSince($0) < 4 } ?? false)
-  let claudeCodeWaiting = claudeCodePriority()?.status == "attention_needed"
   guard isAccessibilityTrusted() else {
     if !claudeCodeHoldsStatus { emit("system", nil, "unavailable", reason: "permission_denied") }
     waitForNextPoll(1.2)
@@ -760,18 +815,15 @@ while true {
   for bundleID in supportedApps {
     guard let observation = observeDesktop(bundleID: bundleID) else { continue }
     observedApp = true
-    // A Claude Code permission prompt outranks everything but a Desktop one.
-    if claudeCodeWaiting && observation.status != "attention_needed" { continue }
     if claudeCodeHoldsStatus && ["idle", "unavailable"].contains(observation.status) { continue }
     emit(observation)
     desktopShown = true
   }
-  // Once Desktop goes quiet again, show the Claude Code state it covered up.
-  if !desktopShown, let priority = claudeCodePriority() {
-    let session = priority.session == "unknown" ? nil : priority.session
-    if lastEmitted?.source != "claude_code" || lastEmitted?.session != session || lastEmitted?.status != priority.status {
-      emit("claude_code", session, priority.status)
-    }
+  // Once Desktop and Claude Code have both been quiet for a while, show the
+  // Claude Code state that other activity covered up.
+  if !desktopShown, Date().timeIntervalSince(lastEmittedAt) >= claudeCodeReassertDelay,
+     let priority = claudeCodePriority(), !claudeCodeStatusShown(priority) {
+    emit("claude_code", priority.session == "unknown" ? nil : priority.session, priority.status)
   }
   if !observedApp && !hasClaudeCodeHooks {
     trackers.removeAll()
