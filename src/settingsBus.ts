@@ -10,12 +10,19 @@ import { BeanPrefs, SettingsPatch } from "./state";
 export type ToBean =
   | { type: "hello" }
   | { type: "patch"; patch: SettingsPatch }
-  | { type: "reset" };
+  | { type: "reset" }
+  | { type: "checkAccess" }
+  | { type: "resetPermission" };
 
 export interface BeanStatus {
   paused: boolean;
   unavailable: boolean;
   statusText: string;
+  /** The latest connection or error message from Bean's window. */
+  notice: string;
+  /** macOS blocks Accessibility, so Reset permission may help. */
+  permissionDenied: boolean;
+  checkingAccess: boolean;
 }
 
 export type FromBean = {

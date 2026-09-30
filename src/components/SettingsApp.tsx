@@ -23,14 +23,13 @@ import { isBeanDesktop, playTone } from "../platform";
 import {
   BeanPrefs,
   BeanSize,
-  connectionMessage,
   defaultPreferences,
   sanitizePrefs,
   SETTINGS_KEYS,
   SettingsPatch,
 } from "../state";
 import { BeanStatus, onMessageFromBean, sendToBean } from "../settingsBus";
-import { BeanAsset, BeanManifest, ClaudeEvent, IdleActivity } from "../types";
+import { BeanAsset, BeanManifest, IdleActivity } from "../types";
 
 const PREFS_KEY = "bean.preferences.v1";
 
@@ -163,7 +162,6 @@ export default function SettingsApp() {
   const [manifest, setManifest] = useState<BeanManifest>(DEFAULT_ASSET_PACK);
   const [version, setVersion] = useState(packageVersion);
   const [notice, setNotice] = useState("");
-  const [busy, setBusy] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const desktop = isBeanDesktop();
 
@@ -209,25 +207,21 @@ export default function SettingsApp() {
       setNotice(`${label} is available in the Bean desktop app.`);
       return;
     }
-    setBusy(true);
     setNotice("");
     try {
       setNotice((await action()) || `${label}: done.`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
     }
   };
 
-  const checkConnection = () =>
-    run("Checking the connection", async () => {
-      const granted = await invoke<boolean>("request_accessibility_permission");
-      if (!granted)
-        return "Turn on Bean in System Settings → Privacy & Security → Accessibility, then check again.";
-      const observed = await invoke<ClaudeEvent>("get_connection_status");
-      return connectionMessage(observed);
-    });
+  // Connection checks run in Bean's window so she reconnects straight away;
+  // their result arrives as Bean's notice.
+  const askBean = (message: "checkAccess" | "resetPermission") => {
+    setNotice("");
+    sendToBean({ type: message });
+  };
+  const checking = status?.checkingAccess ?? false;
 
   const monitorLabel = !status
     ? "Connecting to Bean…"
@@ -285,7 +279,9 @@ export default function SettingsApp() {
                 <div>
                   <strong>{monitorLabel}</strong>
                   <span>
-                    {status?.statusText ?? "Open Bean to change settings."}
+                    {status?.notice ||
+                      status?.statusText ||
+                      "Open Bean to change settings."}
                   </span>
                 </div>
               </div>
@@ -537,12 +533,32 @@ export default function SettingsApp() {
                 <button
                   type="button"
                   className="st-button"
-                  disabled={busy}
-                  onClick={() => void checkConnection()}
+                  disabled={checking}
+                  onClick={() => askBean("checkAccess")}
                 >
-                  {busy ? "Checking…" : "Check"}
+                  {checking ? "Checking…" : "Check"}
                 </button>
               </Row>
+              {status?.permissionDenied && (
+                <Row
+                  title="Reset permission"
+                  detail="Bean is switched on in Accessibility but still blocked? This clears Bean's old permission so you can allow her again."
+                >
+                  <button
+                    type="button"
+                    className="st-button"
+                    disabled={checking}
+                    onClick={() => askBean("resetPermission")}
+                  >
+                    Reset permission
+                  </button>
+                </Row>
+              )}
+              {status?.notice && (
+                <p className="st-help" role="status">
+                  {status.notice}
+                </p>
+              )}
               <Row
                 title="Accessibility settings"
                 detail="Open macOS Privacy & Security → Accessibility."

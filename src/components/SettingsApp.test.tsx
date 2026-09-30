@@ -57,6 +57,9 @@ describe("Settings window", () => {
           paused: true,
           unavailable: false,
           statusText: "Bean is paused",
+          notice: "",
+          permissionDenied: false,
+          checkingAccess: false,
         },
       }),
     );
@@ -107,5 +110,32 @@ describe("Settings window", () => {
     expect(bus.sendToBean).not.toHaveBeenCalledWith({ type: "reset" });
     fireEvent.click(screen.getByRole("button", { name: "Reset" }));
     expect(bus.sendToBean).toHaveBeenCalledWith({ type: "reset" });
+  });
+
+  it("offers Reset permission only when macOS blocks Bean", () => {
+    render(<SettingsApp />);
+    fireEvent.click(screen.getByRole("button", { name: /About & reset/ }));
+    expect(
+      screen.queryByRole("button", { name: "Reset permission" }),
+    ).toBeNull();
+    act(() =>
+      bus.listener?.({
+        type: "prefs",
+        prefs: initialState.preferences,
+        status: {
+          paused: false,
+          unavailable: true,
+          statusText: "Waiting for permission",
+          notice: "Allow Bean in System Settings.",
+          permissionDenied: true,
+          checkingAccess: false,
+        },
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reset permission" }));
+    expect(bus.sendToBean).toHaveBeenCalledWith({ type: "resetPermission" });
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+    expect(bus.sendToBean).toHaveBeenCalledWith({ type: "checkAccess" });
+    expect(screen.getByText("Allow Bean in System Settings.")).toBeTruthy();
   });
 });

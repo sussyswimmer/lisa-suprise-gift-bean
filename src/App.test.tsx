@@ -1,13 +1,6 @@
 // @vitest-environment jsdom
 import { StrictMode } from "react";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { initialState } from "./state";
@@ -88,12 +81,22 @@ describe("native event integration", () => {
   });
   it("updates hook privacy and hides previews when the setting changes", async () => {
     restore({ showContent: true });
+    const toBean = new Map<string, (event: { payload: unknown }) => void>();
+    native.listen.mockImplementation(
+      async (name: string, handler: (event: { payload: unknown }) => void) => {
+        toBean.set(name, handler);
+        return vi.fn();
+      },
+    );
     render(<App />);
     event("working", "private preview");
     expect(screen.getByText("private preview")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Open Bean settings" }));
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Show Claude Code previews" }),
+    await waitFor(() => expect(toBean.has("bean-settings-to-main")).toBe(true));
+    // The Settings window turns previews off.
+    act(() =>
+      toBean.get("bean-settings-to-main")!({
+        payload: { type: "patch", patch: { showContent: false } },
+      }),
     );
     expect(screen.queryByText("private preview")).toBeNull();
     await waitFor(() =>

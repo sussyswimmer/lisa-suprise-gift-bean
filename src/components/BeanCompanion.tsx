@@ -44,7 +44,7 @@ function bubbleFor(
   if (statusText === "Bean is paused")
     return {
       title: "Bean is paused",
-      detail: "Resume monitoring in Settings.",
+      detail: "Resume from the paw icon in the menu bar.",
     };
   if (state === "thinking")
     return {

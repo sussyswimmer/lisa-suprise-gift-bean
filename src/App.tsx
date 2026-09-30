@@ -12,7 +12,6 @@ import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
 import BeanCompanion from "./components/BeanCompanion";
 import BeanMark from "./components/BeanMark";
-import ControlPanel from "./components/ControlPanel";
 import WelcomeDialog from "./components/WelcomeDialog";
 import {
   BeanManifest,
@@ -29,7 +28,7 @@ import {
   reducer,
 } from "./state";
 import { isBeanDesktop, playTone } from "./platform";
-import { onMessageToBean, sendFromBean } from "./settingsBus";
+import { BeanStatus, onMessageToBean, sendFromBean } from "./settingsBus";
 import {
   DEFAULT_ASSET_PACK,
   loadManifest,
@@ -70,7 +69,6 @@ export default function App() {
     dispatch({ type: "setShowContent", value });
   const [connecting, setConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState("");
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [checkingAccess, setCheckingAccess] = useState(false);
   const [accessMessage, setAccessMessage] = useState("");
   const [permissionBlocked, setPermissionBlocked] = useState(false);
@@ -120,40 +118,52 @@ export default function App() {
     );
   }, [state.paused]);
 
-  // The Settings window asks Bean's window to change preferences; this window
-  // saves them and reports every change back.
+  // Settings lives in its own window (opened from the menu bar). Bean's
+  // window owns the preferences: it applies what Settings asks for, runs
+  // connection checks, and reports its state back after every change.
+  const permissionDenied =
+    state.unavailableReason === "permission_denied" || permissionBlocked;
+  const status: BeanStatus = {
+    paused: state.paused,
+    unavailable: state.unavailable,
+    statusText: state.statusText,
+    notice: accessMessage,
+    permissionDenied,
+    checkingAccess,
+  };
+  const reportRef = useRef({ prefs: state.preferences, status });
+  const actionsRef = useRef({
+    checkAccess: () => undefined as unknown,
+    resetPermission: () => undefined as unknown,
+  });
+  useEffect(() => {
+    reportRef.current = { prefs: state.preferences, status };
+    sendFromBean({ type: "prefs", prefs: state.preferences, status });
+    // Report only when something Settings shows has changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    state.preferences,
+    state.paused,
+    state.unavailable,
+    state.statusText,
+    accessMessage,
+    permissionDenied,
+    checkingAccess,
+  ]);
   useEffect(
     () =>
       onMessageToBean((message) => {
         if (message.type === "patch")
           dispatch({ type: "patchPrefs", patch: message.patch });
         else if (message.type === "reset") dispatch({ type: "resetSettings" });
-        else {
-          const current = stateRef.current;
-          sendFromBean({
-            type: "prefs",
-            prefs: current.preferences,
-            status: {
-              paused: current.paused,
-              unavailable: current.unavailable,
-              statusText: current.statusText,
-            },
-          });
-        }
+        else if (message.type === "checkAccess")
+          actionsRef.current.checkAccess();
+        else if (message.type === "resetPermission")
+          actionsRef.current.resetPermission();
+        else sendFromBean({ type: "prefs", ...reportRef.current });
       }),
     [],
   );
-  useEffect(() => {
-    sendFromBean({
-      type: "prefs",
-      prefs: state.preferences,
-      status: {
-        paused: state.paused,
-        unavailable: state.unavailable,
-        statusText: state.statusText,
-      },
-    });
-  }, [state.preferences, state.paused, state.unavailable, state.statusText]);
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -371,16 +381,6 @@ export default function App() {
     }
   };
 
-  const toggleMonitoring = () => {
-    const nextPaused = !state.paused;
-    dispatch({ type: "setPaused", paused: nextPaused });
-    setAccessMessage(
-      nextPaused
-        ? "Monitoring paused until you resume it."
-        : "Bean is watching Claude again.",
-    );
-  };
-
   const checkAccessibility = async () => {
     if (!isBeanDesktop()) {
       setAccessMessage(
@@ -445,6 +445,13 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    actionsRef.current = {
+      checkAccess: () => void checkAccessibility(),
+      resetPermission: () => void resetAccessibility(setAccessMessage),
+    };
+  });
+
   const currentAsset = mappedAsset[normalizeStatusForAsset(state.beanState)];
 
   return (
@@ -468,32 +475,6 @@ export default function App() {
                   ? "Paused"
                   : "Watching"}
             </span>
-            <button
-              className={`settings-trigger${settingsOpen ? " is-open" : ""}`}
-              type="button"
-              onClick={() => setSettingsOpen((open) => !open)}
-              aria-label={
-                settingsOpen ? "Close Bean settings" : "Open Bean settings"
-              }
-              aria-expanded={settingsOpen}
-            >
-              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M9.7 3.3L10.3 2H13.7L14.3 3.3L16 4L17.4 3.5L19.8 5.9L19.2 7.4L20 9.1L21.4 9.7V13.1L20 13.7L19.2 15.4L19.8 16.9L17.4 19.3L16 18.8L14.3 19.5L13.7 20.8H10.3L9.7 19.5L8 18.8L6.6 19.3L4.2 16.9L4.8 15.4L4 13.7L2.6 13.1V9.7L4 9.1L4.8 7.4L4.2 5.9L6.6 3.5L8 4L9.7 3.3Z"
-                  stroke="currentColor"
-                  strokeWidth="1.65"
-                  strokeLinejoin="round"
-                />
-                <circle
-                  cx="12"
-                  cy="11.4"
-                  r="3.1"
-                  stroke="currentColor"
-                  strokeWidth="1.65"
-                />
-              </svg>
-              <span>Settings</span>
-            </button>
           </header>
           <BeanCompanion
             state={state.beanState}
@@ -509,31 +490,6 @@ export default function App() {
             activityFrequency={state.preferences.activityFrequency}
             showBubble={state.preferences.showBubble}
             onDragStart={handleDrag}
-          />
-          <ControlPanel
-            open={settingsOpen}
-            unavailable={state.unavailable}
-            permissionDenied={
-              state.unavailableReason === "permission_denied" ||
-              permissionBlocked
-            }
-            paused={state.paused}
-            soundEnabled={state.preferences.soundEnabled}
-            showContent={showContent}
-            checkingAccess={checkingAccess}
-            accessMessage={accessMessage}
-            statusText={state.statusText}
-            onClose={() => setSettingsOpen(false)}
-            onPauseToggle={() => void toggleMonitoring()}
-            onSoundToggle={() =>
-              dispatch({
-                type: "setSound",
-                soundEnabled: !state.preferences.soundEnabled,
-              })
-            }
-            onShowContentChange={setShowContent}
-            onCheckAccess={() => void checkAccessibility()}
-            onResetAccess={() => void resetAccessibility(setAccessMessage)}
           />
         </main>
       ) : (
