@@ -180,3 +180,55 @@ describe("Bean animations", () => {
     expect(view.container.querySelector(".activity-bubble")).toBeNull();
   });
 });
+
+describe("chat bubbles", () => {
+  const chat = (
+    key: string,
+    title: string | null,
+    status: "working" | "done" = "working",
+  ) => ({
+    key,
+    source: "chat" as const,
+    title,
+    status,
+    updatedAt: 0,
+  });
+  const withChats = (chats: ReturnType<typeof chat>[]) => (
+    <BeanCompanion
+      state="thinking"
+      asset="/working.png"
+      statusText="Chat is running"
+      source="chat"
+      session={null}
+      preview={null}
+      chats={chats}
+      onDragStart={() => undefined}
+    />
+  );
+
+  afterEach(cleanup);
+
+  it("shows the chat's title above Bean", () => {
+    const { container } = render(withChats([chat("a", "Trip ideas")]));
+    expect(
+      container.querySelector(".activity-bubble strong")?.textContent,
+    ).toBe("Trip ideas");
+    expect(container.textContent).toContain("Claude is working…");
+  });
+
+  it("gives every running chat a line and summarises the rest", () => {
+    const { container } = render(
+      withChats([
+        chat("a", "Trip ideas"),
+        chat("b", "Tax questions"),
+        chat("c", null, "done"),
+        chat("d", "Recipes"),
+      ]),
+    );
+    const rows = [...container.querySelectorAll(".chat-row strong")].map(
+      (row) => row.textContent,
+    );
+    expect(rows).toEqual(["Trip ideas", "Tax questions"]);
+    expect(container.textContent).toContain("+2 more");
+  });
+});

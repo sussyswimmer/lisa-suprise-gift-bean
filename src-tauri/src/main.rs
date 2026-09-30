@@ -27,6 +27,9 @@ struct ClaudeEvent {
     timestamp: String,
     preview: Option<String>,
     reason: Option<String>,
+    /// The chat's name, when the helper can read one.
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Default)]

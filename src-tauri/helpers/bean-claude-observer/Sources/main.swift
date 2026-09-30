@@ -10,6 +10,9 @@ struct ClaudeEvent: Codable {
   let timestamp: String
   let preview: String?
   let reason: String?
+  // The chat's name, such as a Claude Desktop conversation title or a Claude
+  // Code project folder. Shown above Bean; never message text.
+  var title: String? = nil
 }
 
 struct SessionTracker {
@@ -26,6 +29,7 @@ struct DesktopObservation {
   let session: String?
   let status: String
   let reason: String?
+  var title: String? = nil
 }
 
 let supportedApps = [
@@ -37,12 +41,20 @@ let supportedApps = [
   "com.anthropic.claude-cowork",
 ]
 var trackers = [String: SessionTracker]()
+// The chat each app showed last, so a partial scan keeps its reply alive.
+struct VisibleChat {
+  var key: String
+  var session: String?
+  var title: String?
+}
+var lastChats = [String: VisibleChat]()
 var claudeCodeEventOffset: UInt64 = 0
 var claudeCodeHooksAvailable = false
 struct ClaudeCodeSession {
   var startedAt: Date
   var lastEvent: Date
   var status: String
+  var title: String? = nil
 }
 
 // Claude Code sessions that are working or waiting on the user. Interrupting
@@ -66,8 +78,10 @@ func now() -> String {
   return formatter.string(from: Date())
 }
 
-func emit(_ source: String, _ session: String?, _ status: String, _ preview: String? = nil, reason: String? = nil) {
-  let event = ClaudeEvent(source: source, session: session, status: status, timestamp: now(), preview: preview, reason: reason)
+func emit(_ source: String, _ session: String?, _ status: String, _ preview: String? = nil, reason: String? = nil,
+          title: String? = nil) {
+  let event = ClaudeEvent(source: source, session: session, status: status, timestamp: now(), preview: preview, reason: reason,
+                          title: title)
   guard let data = try? JSONEncoder().encode(event), let line = String(data: data, encoding: .utf8) else {
     return
   }
@@ -77,7 +91,7 @@ func emit(_ source: String, _ session: String?, _ status: String, _ preview: Str
 }
 
 func emit(_ observation: DesktopObservation) {
-  emit(observation.source, observation.session, observation.status, reason: observation.reason)
+  emit(observation.source, observation.session, observation.status, reason: observation.reason, title: observation.title)
 }
 
 func isAccessibilityTrusted() -> Bool {
@@ -167,6 +181,9 @@ struct NodeInfo {
   var role: String
   var labels = [String]()
   var selected = false
+  // A web area's document title and address, which name the open chat.
+  var documentTitle: String? = nil
+  var documentURL: String? = nil
 }
 
 struct InterfaceSnapshot {
@@ -178,6 +195,8 @@ struct InterfaceSnapshot {
   var hasSendControl = false
   var hasStopControl = false
   var visited = 0
+  var documentTitle: String?
+  var documentURL: String?
 
   // Claude shows Send or Stop beside its composer, so finding either means the
   // scan reached the part of the window that carries the reply status.
@@ -191,6 +210,9 @@ struct InterfaceSnapshot {
     if info.selected { selectedLabels.append(contentsOf: info.labels) }
     hasSendControl = hasSendControl || info.labels.contains(where: isSendLabel)
     hasStopControl = hasStopControl || info.labels.contains(where: isStopLabel)
+    // The first web area reached holds the composer; later ones are sidebars.
+    if documentTitle == nil, let title = chatTitle(from: info.documentTitle) { documentTitle = title }
+    if documentURL == nil, let url = info.documentURL, !url.isEmpty { documentURL = url }
   }
 
   mutating func merge(_ other: InterfaceSnapshot) {
@@ -201,6 +223,8 @@ struct InterfaceSnapshot {
     hasSendControl = hasSendControl || other.hasSendControl
     hasStopControl = hasStopControl || other.hasStopControl
     visited += other.visited
+    documentTitle = documentTitle ?? other.documentTitle
+    documentURL = documentURL ?? other.documentURL
   }
 
   mutating func finish() {
@@ -275,6 +299,10 @@ func isSelected(_ element: AXUIElement, role: String) -> Bool {
 // Read roles and control labels only; message and composer values are never copied.
 func inspectElement(_ element: AXUIElement) -> NodeInfo {
   let role = stringValue(element, kAXRoleAttribute as CFString) ?? ""
+  if role == "AXWebArea" {
+    return NodeInfo(role: role, documentTitle: stringValue(element, kAXTitleAttribute as CFString),
+                    documentURL: stringValue(element, "AXURL" as CFString) ?? urlValue(element))
+  }
   guard controlRoles.contains(role) else { return NodeInfo(role: role) }
   let attributes = [kAXTitleAttribute as CFString, kAXDescriptionAttribute as CFString, "AXIdentifier" as CFString]
   let labels = attributes.compactMap { stringValue(element, $0)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
@@ -304,12 +332,36 @@ func sourceFor(selectedLabels: [String], fallback: String) -> String {
   return fallback
 }
 
-func sessionFrom(title: String?) -> String? {
-  guard let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+// Chromium reports a web area's address as a URL object rather than a string.
+func urlValue(_ element: AXUIElement) -> String? {
+  var value: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(element, "AXURL" as CFString, &value) == .success,
+        let object = value, CFGetTypeID(object) == CFURLGetTypeID() else {
     return nil
   }
-  let genericTitles = ["claude", "claude desktop", "anthropic claude"]
-  return genericTitles.contains(title.lowercased()) ? nil : title
+  return (object as! URL).absoluteString
+}
+
+// Claude titles its page "<chat name> - Claude"; keep just the chat's name.
+func chatTitle(from raw: String?) -> String? {
+  guard var title = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return nil }
+  for suffix in [" - Claude", " – Claude", " — Claude", " | Claude", " · Claude"] where title.hasSuffix(suffix) {
+    title = String(title.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+  let generic: Set<String> = ["claude", "claude desktop", "anthropic claude", "new chat", "new task", "untitled"]
+  return title.isEmpty || generic.contains(title.lowercased()) ? nil : title
+}
+
+// A stable name for the open chat: its conversation ID from the address when
+// Claude exposes one, otherwise its title.
+func chatSession(url: String?, title: String?) -> String? {
+  if let url = url, let components = URLComponents(string: url) {
+    let parts = components.path.split(separator: "/").map(String.init)
+    if parts.count >= 2, ["chat", "task", "project", "code"].contains(parts[parts.count - 2]) {
+      return "\(parts[parts.count - 2])/\(parts[parts.count - 1])"
+    }
+  }
+  return title
 }
 
 // Returns nil when the scan never reached the composer, so a partial read
@@ -402,8 +454,10 @@ func transitionStatus(_ observed: String?, trackerKey: String) -> String {
   return "working"
 }
 
-func resetTracker(_ key: String) {
-  trackers[key] = SessionTracker()
+// Every chat of one app, which is tracked separately so switching chats while
+// one replies neither ends that reply nor celebrates the chat you opened.
+func resetTrackers(for bundleID: String) {
+  trackers = trackers.filter { $0.key != bundleID && !$0.key.hasPrefix(bundleID + "|") }
 }
 
 func pruneClaudeCodeSessions(at date: Date = Date()) {
@@ -509,8 +563,12 @@ func pollClaudeCodeHooks() -> Bool {
   for line in raw.split(whereSeparator: { $0.isNewline }).map(String.init) {
     if let eventData = line.data(using: .utf8), let event = try? JSONDecoder().decode(ClaudeEvent.self, from: eventData) {
       lastClaudeCodeEventAt = Date()
-      if let shown = recordClaudeCodeEvent(session: event.session ?? "unknown", status: event.status) {
-        emit(event.source, event.session, shown, event.preview)
+      let session = event.session ?? "unknown"
+      let shown = recordClaudeCodeEvent(session: session, status: event.status)
+      if let title = event.title { claudeCodeActiveSessions[session]?.title = title }
+      if let shown = shown {
+        emit(event.source, event.session, shown, event.preview,
+             title: event.title ?? claudeCodeActiveSessions[session]?.title)
       }
     } else if ["working", "completed", "reply", "failed", "attention_needed", "stopped"].contains(line) {
       emit("claude_code", nil, line)
@@ -537,7 +595,7 @@ func observeDesktop(bundleID: String) -> DesktopObservation? {
   let activation = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
   let windows = candidateWindows(appElement)
   guard !windows.isEmpty else {
-    resetTracker(trackerKey)
+    resetTrackers(for: bundleID)
     return DesktopObservation(source: defaultSource, session: nil, status: "unavailable", reason: "window_unavailable")
   }
 
@@ -560,16 +618,21 @@ func observeDesktop(bundleID: String) -> DesktopObservation? {
   }
 
   guard let reading = chosen else {
-    if incomplete && trackers[trackerKey]?.sawWorking == true {
-      return DesktopObservation(source: defaultSource, session: nil,
-                                status: transitionStatus(nil, trackerKey: trackerKey), reason: nil)
+    if incomplete, let last = lastChats[bundleID], trackers[last.key]?.sawWorking == true {
+      return DesktopObservation(source: trackers[bundleID]?.lastSource ?? defaultSource, session: last.session,
+                                status: transitionStatus(nil, trackerKey: last.key), reason: nil, title: last.title)
     }
-    resetTracker(trackerKey)
+    resetTrackers(for: bundleID)
     let reason = incomplete ? "interface_scanning" : activation == .cannotComplete ? "interface_unresponsive" : "interface_unavailable"
     return DesktopObservation(source: defaultSource, session: nil, status: "unavailable", reason: reason)
   }
 
-  let transitioned = transitionStatus(directStatus(from: reading.snapshot), trackerKey: trackerKey)
+  let windowTitle = chatTitle(from: stringValue(reading.window, kAXTitleAttribute as CFString))
+  let title = reading.snapshot.documentTitle ?? windowTitle
+  let session = chatSession(url: reading.snapshot.documentURL, title: title)
+  let chatKey = session.map { "\(bundleID)|\($0)" } ?? bundleID
+  lastChats[bundleID] = VisibleChat(key: chatKey, session: session, title: title)
+  let transitioned = transitionStatus(directStatus(from: reading.snapshot), trackerKey: chatKey)
   let status = transitioned == "idle" && composerIsActive(in: appElement, trackerKey: trackerKey)
     ? "message" : transitioned
   // The scan rarely reaches the Chat/Cowork switcher, so keep the last mode it saw.
@@ -577,9 +640,7 @@ func observeDesktop(bundleID: String) -> DesktopObservation? {
                          fallback: trackers[trackerKey]?.lastSource ?? defaultSource)
   trackers[trackerKey, default: SessionTracker()].lastSource = source
   // Desktop monitoring remains status-only; previews are opt-in Code hooks.
-  return DesktopObservation(source: source,
-                            session: sessionFrom(title: stringValue(reading.window, kAXTitleAttribute as CFString)),
-                            status: status, reason: nil)
+  return DesktopObservation(source: source, session: session, status: status, reason: nil, title: title)
 }
 
 func hookObject(from input: Data) -> [String: Any]? {
@@ -608,11 +669,19 @@ func hookPreview(from input: Data, includeContent: Bool) -> (String?, String?) {
   return (session, nil)
 }
 
+// Names a Claude Code session after its project folder.
+func hookTitle(from input: Data) -> String? {
+  guard let cwd = hookObject(from: input)?["cwd"] as? String, !cwd.isEmpty else { return nil }
+  let name = URL(fileURLWithPath: cwd).lastPathComponent
+  return name.isEmpty || name == "/" ? nil : name
+}
+
 func appendClaudeCodeHook(status requested: String, includeContent: Bool) {
   let input = FileHandle.standardInput.readDataToEndOfFile()
   guard let status = hookStatus(requested, input: input) else { return }
   let (session, preview) = hookPreview(from: input, includeContent: includeContent)
-  let event = ClaudeEvent(source: "claude_code", session: session, status: status, timestamp: now(), preview: preview, reason: nil)
+  let event = ClaudeEvent(source: "claude_code", session: session, status: status, timestamp: now(), preview: preview, reason: nil,
+                          title: hookTitle(from: input))
   guard let encoded = try? JSONEncoder().encode(event) else { return }
   let eventsURL = claudeCodeEventsURL
   try? FileManager.default.createDirectory(at: eventsURL.deletingLastPathComponent(), withIntermediateDirectories: true,
@@ -769,6 +838,16 @@ if args.contains("--self-test") {
   precondition(hookPreview(from: input, includeContent: true).1 == "Final reply", "Stop must read the documented reply field")
   precondition(hookPreview(from: input, includeContent: false).0 == "test", "Status-only hooks must retain session identity")
   precondition(hookPreview(from: input, includeContent: false).1 == nil, "Status-only hooks must not expose text")
+  precondition(chatTitle(from: "Trip ideas - Claude") == "Trip ideas", "Chat titles drop Claude's suffix")
+  precondition(chatTitle(from: "Claude") == nil && chatTitle(from: " New chat ") == nil, "Generic titles are not chat names")
+  let chatURL = "https://claude.ai/chat/1234-abcd"
+  precondition(chatSession(url: chatURL, title: "Trip ideas") == "chat/1234-abcd", "Chats are keyed by their address")
+  precondition(chatSession(url: nil, title: "Trip ideas") == "Trip ideas", "Chats fall back to their title")
+  precondition(hookTitle(from: Data(#"{"cwd":"/Users/me/bean"}"#.utf8)) == "bean", "Code sessions are named after their folder")
+  var titled = InterfaceSnapshot()
+  titled.record(NodeInfo(role: "AXWebArea", documentTitle: "Trip ideas - Claude", documentURL: chatURL))
+  titled.record(NodeInfo(role: "AXWebArea", documentTitle: "Sidebar - Claude", documentURL: "https://claude.ai/recents"))
+  precondition(titled.documentTitle == "Trip ideas" && titled.documentURL == chatURL, "The first web area names the chat")
   print("Bean helper self-test passed")
   exit(0)
 }
@@ -912,10 +991,12 @@ while true {
   // covered up. The app holds anything that arrives during a celebration and
   // applies it afterwards, so this can be sent right away.
   if !desktopShown, let priority = claudeCodePriority(), !claudeCodeStatusShown(priority) {
-    emit("claude_code", priority.session == "unknown" ? nil : priority.session, priority.status)
+    emit("claude_code", priority.session == "unknown" ? nil : priority.session, priority.status,
+         title: claudeCodeActiveSessions[priority.session]?.title)
   }
   if !observedApp && !hasClaudeCodeHooks {
     trackers.removeAll()
+    lastChats.removeAll()
     emit("system", nil, "unavailable", reason: "claude_not_running")
   }
   waitForNextPoll(1)

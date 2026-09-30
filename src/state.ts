@@ -1,5 +1,6 @@
 import { ClaudeEvent, BeanState } from "./types";
 import { ActivityFrequency } from "./activity";
+import { ChatActivity, updateChats } from "./chats";
 
 export type BeanSize = "small" | "medium" | "large";
 
@@ -44,6 +45,8 @@ export interface CompanionState {
   preferences: BeanPrefs;
   lastStatusTs: string | null;
   preview: string | null;
+  /** Chats and Claude Code sessions Bean is following, for her bubbles. */
+  chats: ChatActivity[];
 }
 
 const defaultPrefs: BeanPrefs = {
@@ -102,6 +105,7 @@ export const initialState: CompanionState = {
   preferences: defaultPrefs,
   lastStatusTs: null,
   preview: null,
+  chats: [],
 };
 
 type Action =
@@ -130,8 +134,12 @@ type Action =
 
 export function reducer(state: CompanionState, action: Action): CompanionState {
   switch (action.type) {
-    case "claudeEvent":
-      return nextStateFromEvent(action.event, state);
+    case "claudeEvent": {
+      // Ignored events (paused, duplicate, out of order) leave chats alone too.
+      const next = nextStateFromEvent(action.event, state);
+      if (next === state) return state;
+      return { ...next, chats: updateChats(state.chats, action.event) };
+    }
     case "setBean":
       return {
         ...state,
@@ -257,6 +265,7 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
         session: null,
         statusText: "No active session",
         preview: null,
+        chats: [],
         unavailable: false,
         unavailableReason: null,
         lastStatusTs: null,

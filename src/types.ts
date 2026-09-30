@@ -24,6 +24,8 @@ export interface ClaudeEvent {
   timestamp: string;
   preview?: string | null;
   reason?: string | null;
+  /** The chat's name: a Claude Desktop chat title or Claude Code project. */
+  title?: string | null;
 }
 
 /** A horizontal or grid sprite sheet, such as a Higgsfield AutoSprite export. */
@@ -102,4 +104,5 @@ export const claudeEventSchema = z.object({
   timestamp: z.string().refine((value) => Number.isFinite(Date.parse(value))),
   preview: z.string().nullable().optional(),
   reason: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
 });

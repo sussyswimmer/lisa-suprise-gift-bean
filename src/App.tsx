@@ -28,6 +28,7 @@ import {
   reducer,
 } from "./state";
 import { isBeanDesktop, playTone } from "./platform";
+import { chatKey, visibleChats } from "./chats";
 import { BeanStatus, onMessageToBean, sendFromBean } from "./settingsBus";
 import {
   DEFAULT_ASSET_PACK,
@@ -79,6 +80,8 @@ export default function App() {
   const [checkingAccess, setCheckingAccess] = useState(false);
   const [accessMessage, setAccessMessage] = useState("");
   const [permissionBlocked, setPermissionBlocked] = useState(false);
+  // Finished and forgotten chats leave Bean's bubble on their own.
+  const [clock, setClock] = useState(() => Date.now());
   const connectionRequested = useRef(false);
 
   useEffect(() => {
@@ -117,6 +120,15 @@ export default function App() {
       onTop: state.preferences.alwaysOnTop,
     }).catch((error) => setAccessMessage(String(error)));
   }, [state.preferences.alwaysOnTop]);
+
+  const shownChats = visibleChats(state.chats, clock, chatKey(state));
+  const followingChats = shownChats.length > 0;
+  useEffect(() => {
+    setClock(Date.now());
+    if (!followingChats) return;
+    const intervalId = window.setInterval(() => setClock(Date.now()), 1_000);
+    return () => window.clearInterval(intervalId);
+  }, [followingChats, state.chats]);
 
   // Keep the menu bar's Pause/Resume item in step with Bean.
   useEffect(() => {
@@ -495,6 +507,7 @@ export default function App() {
             source={state.source}
             session={state.session}
             preview={showContent ? state.preview : null}
+            chats={shownChats}
             asset={currentAsset}
             restAsset={mappedAsset.idle}
             motions={assetPackPath ? {} : manifest.motions}

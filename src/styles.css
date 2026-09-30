@@ -106,7 +106,9 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
 .activity-bubble {
   position: absolute;
   z-index: 2;
-  top: 46px;
+  /* Anchored above Bean's head (her window grows with her), so extra chat
+     rows grow upward instead of covering her. */
+  bottom: 124px;
   left: 50%;
   width: 236px;
   min-height: 52px;
@@ -136,8 +138,18 @@ body { background: transparent; color: var(--ink); font-family: "Atkinson Hyperl
   transform: rotate(45deg);
 }
 .activity-bubble strong, .activity-bubble span { position: relative; z-index: 1; display: block; }
-.activity-bubble strong { font-size: 12px; line-height: 15px; letter-spacing: -0.25px; }
-.activity-bubble span { margin-top: 2px; color: #697789; font-size: 10px; line-height: 13px; }
+.activity-bubble strong { overflow: hidden; font-size: 12px; line-height: 15px; letter-spacing: -0.25px; text-overflow: ellipsis; white-space: nowrap; }
+.activity-bubble span { display: -webkit-box; overflow: hidden; margin-top: 2px; color: #697789; font-size: 10px; line-height: 13px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.activity-bubble.is-list { padding: 7px 12px 8px; }
+.chat-row { position: relative; z-index: 1; display: flex; align-items: center; gap: 6px; }
+.chat-row + .chat-row { margin-top: 3px; }
+.chat-row::before { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: #486eae; box-shadow: 0 0 0 2px #dfe7f4; content: ""; }
+.chat-row.chat-attention::before { background: #af514d; box-shadow: 0 0 0 2px #f4dfd2; }
+.chat-row.chat-done::before { background: #6eaa79; box-shadow: 0 0 0 2px #e0f0e2; }
+.activity-bubble .chat-row strong { flex: 1; min-width: 0; font-size: 11px; line-height: 15px; }
+.chat-row em { flex: 0 0 auto; color: #697789; font-size: 9px; font-style: normal; font-weight: 700; }
+.chat-row.chat-attention em { color: #af514d; }
+.activity-bubble .chat-more { margin-top: 3px; font-size: 9px; line-height: 11px; }
 .activity-thinking { border-color: #486eae; }
 .activity-happy { border-color: #b87831; }
 .activity-noticed { border-color: #af514d; }

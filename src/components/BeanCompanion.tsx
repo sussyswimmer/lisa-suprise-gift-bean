@@ -13,6 +13,7 @@ import {
   restDelayMs,
 } from "../activity";
 import BeanSprite from "./BeanSprite";
+import { ChatActivity, chatName } from "../chats";
 
 interface BeanCompanionProps {
   state: BeanState;
@@ -30,7 +31,28 @@ interface BeanCompanionProps {
   source: string;
   session: string | null;
   preview: string | null;
+  /** Chats Claude is working on, newest first; each gets a line of its own. */
+  chats?: ChatActivity[];
   onDragStart: () => void;
+}
+
+// Rows the bubble fits above Bean before it summarises the rest.
+const MAX_CHAT_ROWS = 3;
+const CHAT_STATUS_LABELS = {
+  working: "working",
+  attention: "needs you",
+  done: "done",
+} as const;
+
+function chatBubbleFor(chat: ChatActivity, snippet: string | undefined) {
+  const detail =
+    chat.status === "attention"
+      ? "Claude needs you"
+      : chat.status === "done"
+        ? snippet || "Reply is ready!"
+        : snippet ||
+          `${chat.source === "claude_code" ? "Claude Code" : "Claude"} is working…`;
+  return { title: chatName(chat), detail };
 }
 
 function bubbleFor(
@@ -89,6 +111,7 @@ export default function BeanCompanion({
   source,
   session,
   preview,
+  chats = [],
   onDragStart,
 }: BeanCompanionProps) {
   const [idleActivity, setIdleActivity] = useState<IdleActivity>("breathe");
@@ -104,7 +127,22 @@ export default function BeanCompanion({
     sleepy: "sleeping breathing",
     soundOff: "quiet idle",
   };
-  const bubble = bubbleFor(state, source, statusText, session, preview);
+  // Chat names replace the generic status while Claude works; Bean's own
+  // states (paused, waiting for permission, asleep) still speak for her.
+  const followChats =
+    chats.length > 0 && state !== "sleepy" && statusText !== "Bean is paused";
+  const snippet = preview?.replace(/\s+/g, " ").trim().slice(0, 96);
+  const bubble =
+    followChats && chats.length === 1
+      ? chatBubbleFor(chats[0], snippet)
+      : bubbleFor(state, source, statusText, session, preview);
+  const chatRows =
+    followChats && chats.length > 1
+      ? chats.slice(
+          0,
+          chats.length > MAX_CHAT_ROWS ? MAX_CHAT_ROWS - 1 : MAX_CHAT_ROWS,
+        )
+      : null;
   const isWaiting = isWaitingState(state);
 
   // Bean runs over to her laptop whenever Claude starts a new piece of work.
@@ -199,12 +237,33 @@ export default function BeanCompanion({
 
   return (
     <section className="companion-area">
-      {showBubble && (
-        <div className={`activity-bubble activity-${state}`} aria-live="polite">
-          <strong>{bubble.title}</strong>
-          <span>{bubble.detail}</span>
-        </div>
-      )}
+      {showBubble &&
+        (chatRows ? (
+          <div
+            className={`activity-bubble activity-${state} is-list`}
+            aria-live="polite"
+          >
+            {chatRows.map((chat) => (
+              <div key={chat.key} className={`chat-row chat-${chat.status}`}>
+                <strong>{chatName(chat)}</strong>
+                <em>{CHAT_STATUS_LABELS[chat.status]}</em>
+              </div>
+            ))}
+            {chats.length > chatRows.length && (
+              <span className="chat-more">
+                +{chats.length - chatRows.length} more
+              </span>
+            )}
+          </div>
+        ) : (
+          <div
+            className={`activity-bubble activity-${state}`}
+            aria-live="polite"
+          >
+            <strong>{bubble.title}</strong>
+            <span>{bubble.detail}</span>
+          </div>
+        ))}
       <button
         type="button"
         data-tauri-drag-region

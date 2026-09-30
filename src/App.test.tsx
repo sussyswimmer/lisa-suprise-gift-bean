@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
 import { StrictMode } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import App from "./App";
 import { initialState } from "./state";
 
@@ -158,7 +166,18 @@ describe("native event integration", () => {
 
 describe("celebration timing", () => {
   it("shows work that arrived during a celebration once it ends", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+        "Date",
+      ],
+    });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     vi.setSystemTime(new Date("2026-09-22T00:00:00Z"));
     restore();
     render(<App />);
@@ -177,10 +196,16 @@ describe("celebration timing", () => {
       });
     send("completed", "s1", 0);
     send("working", "s2", 2);
-    expect(screen.getByText("Reply is ready!")).toBeTruthy();
+    expect(document.querySelector(".bean-happy")).toBeTruthy();
+    // Both sessions get a line of their own above Bean.
+    expect(screen.getByText("done")).toBeTruthy();
+    expect(screen.getByText("working")).toBeTruthy();
     act(() => vi.advanceTimersByTime(6_100));
-    expect(screen.getByText("Claude Code is working")).toBeTruthy();
-    vi.useRealTimers();
+    expect(document.querySelector(".bean-thinking")).toBeTruthy();
+    // The finished session leaves the list after a few seconds.
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(screen.queryByText("done")).toBeNull();
+    expect(screen.getByText("Claude Code is working…")).toBeTruthy();
   });
 });
 
