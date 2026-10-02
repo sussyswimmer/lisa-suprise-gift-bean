@@ -212,7 +212,12 @@ struct InterfaceSnapshot {
     hasStopControl = hasStopControl || info.labels.contains(where: isStopLabel)
     // The first web area reached holds the composer; later ones are sidebars.
     if documentTitle == nil, let title = chatTitle(from: info.documentTitle) { documentTitle = title }
-    if documentURL == nil, let url = info.documentURL, !url.isEmpty { documentURL = url }
+    // Claude's window can hold more than one web area; prefer the one whose
+    // address names a conversation.
+    if let url = info.documentURL, !url.isEmpty,
+       documentURL == nil || (!isConversationURL(documentURL) && isConversationURL(url)) {
+      documentURL = url
+    }
   }
 
   mutating func merge(_ other: InterfaceSnapshot) {
@@ -224,7 +229,9 @@ struct InterfaceSnapshot {
     hasStopControl = hasStopControl || other.hasStopControl
     visited += other.visited
     documentTitle = documentTitle ?? other.documentTitle
-    documentURL = documentURL ?? other.documentURL
+    if documentURL == nil || (!isConversationURL(documentURL) && isConversationURL(other.documentURL)) {
+      documentURL = other.documentURL ?? documentURL
+    }
   }
 
   mutating func finish() {
@@ -300,7 +307,7 @@ func isSelected(_ element: AXUIElement, role: String) -> Bool {
 func inspectElement(_ element: AXUIElement) -> NodeInfo {
   let role = stringValue(element, kAXRoleAttribute as CFString) ?? ""
   if role == "AXWebArea" {
-    return NodeInfo(role: role, documentTitle: stringValue(element, kAXTitleAttribute as CFString),
+    return NodeInfo(role: role, documentTitle: webAreaTitle(element),
                     documentURL: stringValue(element, "AXURL" as CFString) ?? urlValue(element))
   }
   guard controlRoles.contains(role) else { return NodeInfo(role: role) }
@@ -340,6 +347,29 @@ func urlValue(_ element: AXUIElement) -> String? {
     return nil
   }
   return (object as! URL).absoluteString
+}
+
+// Chromium exposes a page's title as the web area's description on recent
+// versions and as its title on older ones, so read whichever names the chat.
+func webAreaTitle(_ element: AXUIElement) -> String? {
+  let raw = [kAXTitleAttribute as CFString, kAXDescriptionAttribute as CFString].map { stringValue(element, $0) }
+  return raw.first(where: { chatTitle(from: $0) != nil }) ?? nil
+}
+
+// The web area holding the focused composer, found by walking up from it.
+func enclosingWebArea(in appElement: AXUIElement) -> NodeInfo? {
+  var current = elementValue(appElement, kAXFocusedUIElementAttribute as CFString)
+  for _ in 0..<60 {
+    guard let element = current else { return nil }
+    if stringValue(element, kAXRoleAttribute as CFString) == "AXWebArea" { return inspectElement(element) }
+    current = elementValue(element, kAXParentAttribute as CFString)
+  }
+  return nil
+}
+
+func isConversationURL(_ url: String?) -> Bool {
+  guard let url = url else { return false }
+  return chatSession(url: url, title: nil) != nil
 }
 
 // Claude titles its page "<chat name> - Claude"; keep just the chat's name.
@@ -613,8 +643,17 @@ func observeDesktop(bundleID: String) -> DesktopObservation? {
     if snapshot.readable && chosen == nil { chosen = (window, snapshot) }
   }
   if chosen?.snapshot.hasComposerControls != true,
-     let nearby = composerSurroundings(in: appElement), nearby.hasComposerControls {
+     var nearby = composerSurroundings(in: appElement), nearby.hasComposerControls {
+    // The scan around the composer rarely climbs to the web area, so keep the
+    // chat's name from the whole-window scan.
+    nearby.documentTitle = nearby.documentTitle ?? chosen?.snapshot.documentTitle
+    nearby.documentURL = nearby.documentURL ?? chosen?.snapshot.documentURL
     chosen = (chosen?.window ?? windows[0], nearby)
+  }
+  if var reading = chosen, reading.snapshot.documentTitle == nil || !isConversationURL(reading.snapshot.documentURL),
+     let webArea = enclosingWebArea(in: appElement) {
+    reading.snapshot.record(webArea)
+    chosen = reading
   }
 
   guard let reading = chosen else {
@@ -628,6 +667,7 @@ func observeDesktop(bundleID: String) -> DesktopObservation? {
   }
 
   let windowTitle = chatTitle(from: stringValue(reading.window, kAXTitleAttribute as CFString))
+    ?? chatTitle(from: stringValue(reading.window, kAXDescriptionAttribute as CFString))
   let title = reading.snapshot.documentTitle ?? windowTitle
   let session = chatSession(url: reading.snapshot.documentURL, title: title)
   let chatKey = session.map { "\(bundleID)|\($0)" } ?? bundleID
@@ -848,6 +888,10 @@ if args.contains("--self-test") {
   titled.record(NodeInfo(role: "AXWebArea", documentTitle: "Trip ideas - Claude", documentURL: chatURL))
   titled.record(NodeInfo(role: "AXWebArea", documentTitle: "Sidebar - Claude", documentURL: "https://claude.ai/recents"))
   precondition(titled.documentTitle == "Trip ideas" && titled.documentURL == chatURL, "The first web area names the chat")
+  var shelled = InterfaceSnapshot()
+  shelled.record(NodeInfo(role: "AXWebArea", documentTitle: "Claude", documentURL: "app://claude/index.html"))
+  shelled.record(NodeInfo(role: "AXWebArea", documentTitle: "Trip ideas - Claude", documentURL: chatURL))
+  precondition(shelled.documentTitle == "Trip ideas" && shelled.documentURL == chatURL, "Claude's shell does not hide the chat")
   print("Bean helper self-test passed")
   exit(0)
 }
@@ -860,8 +904,8 @@ if args.contains("--request-permission") {
   emit("system", nil, granted ? "idle" : "unavailable", reason: granted ? nil : "permission_denied")
   exit(0)
 }
-// Prints what Bean can read from Claude's window: control roles and labels
-// only, never message or composer text. Saved from the menu bar so a person
+// Prints what Bean can read from Claude's window: control roles and labels and
+// the open chat's name, never message or composer text. Saved from the menu bar so a person
 // can send it along when Bean misreads Claude.
 if args.contains("--diagnose") {
   print("Bean diagnostics \(now())")
@@ -886,6 +930,11 @@ if args.contains("--diagnose") {
       let deadline = Date().addingTimeInterval(4)
       let inspect: (AXUIElement) -> NodeInfo = { element in
         let info = inspectElement(element)
+        if info.role == "AXWebArea" {
+          let title = stringValue(element, kAXTitleAttribute as CFString) ?? "-"
+          let description = stringValue(element, kAXDescriptionAttribute as CFString) ?? "-"
+          controls.append("AXWebArea title: \(title) | description: \(description) | url: \(info.documentURL ?? "-")")
+        }
         if !info.labels.isEmpty && controls.count < 120 {
           controls.append("\(info.role)\(info.selected ? " [selected]" : ""): \(info.labels.joined(separator: " | "))")
         }
@@ -895,6 +944,7 @@ if args.contains("--diagnose") {
                               children: childElements, inspect: inspect,
                               shouldContinue: { Date() < deadline })
       let reading = directStatus(from: snapshot) ?? "none"
+      print("  window \(index + 1) title: \(stringValue(window, kAXTitleAttribute as CFString) ?? "-")")
       print("  window \(index + 1): nodes \(snapshot.visited), web area \(snapshot.readable), composer \(snapshot.hasComposer)")
       print("    send \(snapshot.hasSendControl), stop \(snapshot.hasStopControl), reads \(reading)")
       for line in controls { print("    \(line)") }
@@ -906,6 +956,7 @@ if args.contains("--diagnose") {
     }
     if let observation = observeDesktop(bundleID: bundleID) {
       print("  Bean shows: \(observation.source) \(observation.status) \(observation.reason ?? "")")
+      print("  chat name: \(observation.title ?? "none"), chat id: \(observation.session ?? "none")")
     }
   }
   exit(0)
