@@ -48,9 +48,9 @@ jobs:
       - name: Verify bundled Accessibility helper
         shell: bash
         run: |
-          helper="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Bean.app/Contents/MacOS/bean-claude-observer"
-          test -x "$helper"
-          "$helper" --self-test
+          for dmg in src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg; do
+            scripts/verify-dmg.sh "$dmg"
+          done
       - name: Emit checksums
         run: |
           shasum -a 256 src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg > \

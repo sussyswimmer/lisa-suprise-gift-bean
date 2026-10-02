@@ -43,16 +43,8 @@ out=$(mktemp -d)
 for target in "${targets[@]}"; do
   npm run build:helper -- "$target"
   npx tauri build --target "$target"
-  bundle="src-tauri/target/$target/release/bundle"
-  app="$bundle/macos/Bean.app"
-  codesign --verify --deep --strict "$app"
-  if [[ $target == x86_64-* && "$(uname -m)" == arm64 ]] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
-    echo "Skipping the Intel helper self-test: Rosetta is not installed."
-  else
-    "$app/Contents/MacOS/bean-claude-observer" --self-test
-  fi
-  for dmg in "$bundle"/dmg/*.dmg; do
-    hdiutil verify -quiet "$dmg"
+  for dmg in "src-tauri/target/$target/release/bundle"/dmg/*.dmg; do
+    scripts/verify-dmg.sh "$dmg"
     cp "$dmg" "$out/"
   done
 done
