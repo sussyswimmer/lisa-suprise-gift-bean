@@ -1,4 +1,8 @@
 import { ClaudeEvent, BeanState } from "./types";
+import { ActivityFrequency } from "./activity";
+import { ChatActivity, updateChats } from "./chats";
+
+export type BeanSize = "small" | "medium" | "large";
 
 export interface BeanPrefs {
   soundEnabled: boolean;
@@ -10,6 +14,20 @@ export interface BeanPrefs {
   manualMessage: string;
   lastCompletedAt: string;
   lastEventKey: string | null;
+  /** Idle activities switched off in Settings. */
+  disabledActivities: string[];
+  activityFrequency: ActivityFrequency;
+  beanSize: BeanSize;
+  /** How big the status boxes above Bean's head are. */
+  bubbleSize: BeanSize;
+  alwaysOnTop: boolean;
+  showBubble: boolean;
+  /** Completion chime volume, 0 to 100. */
+  soundVolume: number;
+  /** Jump when Claude finishes; otherwise Bean just goes back to idling. */
+  celebrateCompletions: boolean;
+  /** Alert when Claude needs you; otherwise Bean stays calm. */
+  alertOnAttention: boolean;
 }
 
 export interface CompanionState {
@@ -20,9 +38,15 @@ export interface CompanionState {
   muted: boolean;
   paused: boolean;
   unavailable: boolean;
+  /** Why monitoring is unavailable, e.g. "permission_denied". */
+  unavailableReason: string | null;
+  /** The latest update that arrived during a celebration, applied after it. */
+  heldEvent: ClaudeEvent | null;
   preferences: BeanPrefs;
   lastStatusTs: string | null;
   preview: string | null;
+  /** Chats and Claude Code sessions Bean is following, for her bubbles. */
+  chats: ChatActivity[];
 }
 
 const defaultPrefs: BeanPrefs = {
@@ -35,7 +59,38 @@ const defaultPrefs: BeanPrefs = {
   manualMessage: "Official Bean report: you are very loved.",
   lastCompletedAt: "",
   lastEventKey: null,
+  disabledActivities: [],
+  activityFrequency: "normal",
+  beanSize: "medium",
+  bubbleSize: "medium",
+  alwaysOnTop: true,
+  showBubble: true,
+  soundVolume: 60,
+  celebrateCompletions: true,
+  alertOnAttention: true,
 };
+
+/** Preferences a person changes in Settings (not Bean's own bookkeeping). */
+export const SETTINGS_KEYS = [
+  "soundEnabled",
+  "showContent",
+  "paused",
+  "disabledActivities",
+  "activityFrequency",
+  "beanSize",
+  "bubbleSize",
+  "alwaysOnTop",
+  "showBubble",
+  "soundVolume",
+  "celebrateCompletions",
+  "alertOnAttention",
+] as const satisfies readonly (keyof BeanPrefs)[];
+
+export type SettingsPatch = Partial<
+  Pick<BeanPrefs, (typeof SETTINGS_KEYS)[number]>
+>;
+
+export const defaultPreferences: BeanPrefs = defaultPrefs;
 
 export const initialState: CompanionState = {
   beanState: "sleepy",
@@ -45,9 +100,12 @@ export const initialState: CompanionState = {
   muted: true,
   paused: false,
   unavailable: false,
+  unavailableReason: null,
+  heldEvent: null,
   preferences: defaultPrefs,
   lastStatusTs: null,
   preview: null,
+  chats: [],
 };
 
 type Action =
@@ -62,19 +120,26 @@ type Action =
     }
   | { type: "setPaused"; paused: boolean }
   | { type: "setShowContent"; value: boolean }
-  | { type: "setUnavailable"; unavailable: boolean }
+  | { type: "setUnavailable"; unavailable: boolean; reason?: string }
   | { type: "setCurrentNote"; value: string }
   | { type: "setManualMessage"; value: string }
   | { type: "setSound"; soundEnabled: boolean }
   | { type: "setPhotoMode"; photoMode: boolean }
   | { type: "setWelcomeShown" }
   | { type: "loadPrefs"; prefs: unknown }
+  | { type: "patchPrefs"; patch: SettingsPatch }
+  | { type: "resetSettings" }
+  | { type: "releaseHeld" }
   | { type: "resetForSession" };
 
 export function reducer(state: CompanionState, action: Action): CompanionState {
   switch (action.type) {
-    case "claudeEvent":
-      return nextStateFromEvent(action.event, state);
+    case "claudeEvent": {
+      // Ignored events (paused, duplicate, out of order) leave chats alone too.
+      const next = nextStateFromEvent(action.event, state);
+      if (next === state) return state;
+      return { ...next, chats: updateChats(state.chats, action.event) };
+    }
     case "setBean":
       return {
         ...state,
@@ -105,6 +170,7 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
         return {
           ...state,
           unavailable: false,
+          unavailableReason: null,
           beanState: state.unavailable ? "idle" : state.beanState,
           statusText: state.unavailable
             ? "Waiting and watching"
@@ -114,6 +180,7 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
       return {
         ...state,
         unavailable: true,
+        unavailableReason: action.reason ?? null,
         beanState: "sleepy",
         statusText: "Accessibility not available yet — waiting for permission",
       };
@@ -158,6 +225,38 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
       };
     }
 
+    case "patchPrefs": {
+      const allowed = Object.fromEntries(
+        Object.entries(action.patch).filter(([key]) =>
+          (SETTINGS_KEYS as readonly string[]).includes(key),
+        ),
+      );
+      const safe = sanitizePrefs(
+        { ...state.preferences, ...allowed },
+        state.preferences,
+      );
+      const next = { ...state, preferences: safe, muted: !safe.soundEnabled };
+      if (safe.paused !== state.paused)
+        return reducer(next, { type: "setPaused", paused: safe.paused });
+      return next;
+    }
+
+    case "resetSettings": {
+      const reset = Object.fromEntries(
+        SETTINGS_KEYS.map((key) => [key, defaultPrefs[key]]),
+      ) as SettingsPatch;
+      return reducer(state, { type: "patchPrefs", patch: reset });
+    }
+
+    case "releaseHeld":
+      return state.heldEvent && state.beanState === "happy"
+        ? nextStateFromEvent(
+            state.heldEvent,
+            { ...state, heldEvent: null },
+            { afterCelebration: true },
+          )
+        : state;
+
     case "resetForSession":
       return {
         ...state,
@@ -166,7 +265,9 @@ export function reducer(state: CompanionState, action: Action): CompanionState {
         session: null,
         statusText: "No active session",
         preview: null,
+        chats: [],
         unavailable: false,
+        unavailableReason: null,
         lastStatusTs: null,
       };
     default:
@@ -181,17 +282,50 @@ export function sanitizePrefs(
   if (!value || typeof value !== "object" || Array.isArray(value))
     return { ...fallback };
   const input = value as Record<string, unknown>;
-  return Object.fromEntries(
+  const prefs = Object.fromEntries(
     Object.entries(fallback).map(([key, defaultValue]) => [
       key,
-      (typeof input[key] === typeof defaultValue && input[key] !== null) ||
+      (typeof input[key] === typeof defaultValue &&
+        input[key] !== null &&
+        Array.isArray(input[key]) === Array.isArray(defaultValue)) ||
       (key === "lastEventKey" &&
         (input[key] === null || typeof input[key] === "string"))
         ? input[key]
         : defaultValue,
     ]),
   ) as unknown as BeanPrefs;
+  return {
+    ...prefs,
+    disabledActivities: prefs.disabledActivities.filter(
+      (name): name is string => typeof name === "string",
+    ),
+    activityFrequency: oneOf(
+      prefs.activityFrequency,
+      ["calm", "normal", "lively"],
+      fallback.activityFrequency,
+    ),
+    beanSize: oneOf(
+      prefs.beanSize,
+      ["small", "medium", "large"],
+      fallback.beanSize,
+    ),
+    bubbleSize: oneOf(
+      prefs.bubbleSize,
+      ["small", "medium", "large"],
+      fallback.bubbleSize,
+    ),
+    soundVolume: Number.isFinite(prefs.soundVolume)
+      ? Math.min(100, Math.max(0, Math.round(prefs.soundVolume)))
+      : fallback.soundVolume,
+  };
 }
+
+function oneOf<T extends string>(value: string, options: T[], fallback: T): T {
+  return (options as string[]).includes(value) ? (value as T) : fallback;
+}
+
+/** How long "Reply is ready!" stays up before quiet updates replace it. */
+export const CELEBRATION_HOLD_MS = 6_000;
 
 export function buildDedupKey(event: ClaudeEvent): string {
   return JSON.stringify([
@@ -226,6 +360,7 @@ export function connectionMessage(event: ClaudeEvent): string {
 export function nextStateFromEvent(
   event: ClaudeEvent,
   now: CompanionState,
+  { afterCelebration = false }: { afterCelebration?: boolean } = {},
 ): CompanionState {
   const status = event.status;
 
@@ -243,6 +378,23 @@ export function nextStateFromEvent(
     Date.parse(event.timestamp) < Date.parse(now.lastStatusTs)
   )
     return now;
+  // Claude reports idle again within a second of finishing; let Bean finish
+  // celebrating so the completion is actually noticeable. Work that another
+  // session was already doing waits too; new work in the finished one does not.
+  // The latest held update is kept and applied when the celebration ends, so
+  // nothing that arrives meanwhile is lost.
+  if (
+    !afterCelebration &&
+    now.beanState === "happy" &&
+    (status === "idle" ||
+      status === "reply" ||
+      status === "message" ||
+      (status === "working" &&
+        (event.source !== now.source || event.session !== now.session))) &&
+    Date.parse(event.timestamp) - Date.parse(now.preferences.lastCompletedAt) <
+      CELEBRATION_HOLD_MS
+  )
+    return { ...now, heldEvent: event };
   const sameSession =
     now.session === event.session && now.source === event.source;
   const preview =
@@ -253,7 +405,12 @@ export function nextStateFromEvent(
           : null
         : event.preview
       : null;
-  now = { ...now, preview };
+  now = {
+    ...now,
+    preview,
+    unavailableReason: status === "unavailable" ? (event.reason ?? null) : null,
+    heldEvent: null,
+  };
 
   if (status === "unavailable") {
     return {
@@ -287,7 +444,8 @@ export function nextStateFromEvent(
       unavailable: false,
       source: event.source,
       session: event.session,
-      beanState: now.beanState === "thinking" ? "thinking" : "idle",
+      // Streaming a reply is still work in progress; Stop confirms completion.
+      beanState: "thinking",
       statusText: "Claude is replying",
       lastStatusTs: event.timestamp,
       preview,
@@ -311,7 +469,7 @@ export function nextStateFromEvent(
       unavailable: false,
       source: event.source,
       session: event.session,
-      beanState: "happy",
+      beanState: now.preferences.celebrateCompletions ? "happy" : "idle",
       preview,
       statusText: "Done — a completion heartbeat arrived",
       lastStatusTs: event.timestamp,
@@ -329,7 +487,7 @@ export function nextStateFromEvent(
       unavailable: false,
       source: event.source,
       session: event.session,
-      beanState: "noticed",
+      beanState: now.preferences.alertOnAttention ? "noticed" : "idle",
       statusText: "Needs attention",
       lastStatusTs: event.timestamp,
     };

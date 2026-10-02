@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   useCallback,
   useEffect,
   useMemo,
@@ -11,7 +12,6 @@ import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
 import BeanCompanion from "./components/BeanCompanion";
 import BeanMark from "./components/BeanMark";
-import ControlPanel from "./components/ControlPanel";
 import WelcomeDialog from "./components/WelcomeDialog";
 import {
   BeanManifest,
@@ -20,49 +20,37 @@ import {
   claudeEventSchema,
 } from "./types";
 import {
+  BeanSize,
+  CELEBRATION_HOLD_MS,
   connectionMessage,
   initialState,
   nextStateFromEvent,
   reducer,
 } from "./state";
+import { isBeanDesktop, playTone } from "./platform";
+import { chatKey, visibleChats } from "./chats";
+import { BeanStatus, onMessageToBean, sendFromBean } from "./settingsBus";
 import {
   DEFAULT_ASSET_PACK,
   loadManifest,
   normalizeStatusForAsset,
+  preloadAssets,
 } from "./beanAssets";
 
 const PREFS_KEY = "bean.preferences.v1";
 
-// `window.isTauri` is only present when the optional global Tauri API is
-// enabled. The module API works without that global, so detect its internal
-// bridge instead and keep the production bundle connected to Rust.
-function isBeanDesktop() {
-  if (typeof window === "undefined") return false;
+const BEAN_SCALE: Record<BeanSize, number> = {
+  small: 0.8,
+  medium: 1,
+  large: 1.25,
+};
 
-  // Tauri's internal object is injected asynchronously in some packaged
-  // builds.  The app is already running at a tauri: URL, though, so relying
-  // only on that object can prevent the first native status sync and leave
-  // Bean showing an old permission warning forever.
-  return (
-    window.location.protocol === "tauri:" || "__TAURI_INTERNALS__" in window
-  );
-}
-
-function playTone() {
-  if (typeof AudioContext === "undefined") return;
-  const context = new AudioContext();
-  const osc = context.createOscillator();
-  const gain = context.createGain();
-  osc.type = "triangle";
-  osc.frequency.value = 620;
-  gain.gain.value = 0.02;
-  osc.connect(gain).connect(context.destination);
-  osc.start();
-  osc.onended = () => {
-    void context.close();
-  };
-  osc.stop(context.currentTime + 0.25);
-}
+// The status boxes above Bean's head; large still fits her 272 px window.
+const BUBBLE_SCALE: Record<BeanSize, number> = {
+  small: 0.78,
+  medium: 1,
+  large: 1.12,
+};
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState, (fallback) => {
@@ -89,9 +77,11 @@ export default function App() {
     dispatch({ type: "setShowContent", value });
   const [connecting, setConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState("");
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [checkingAccess, setCheckingAccess] = useState(false);
   const [accessMessage, setAccessMessage] = useState("");
+  const [permissionBlocked, setPermissionBlocked] = useState(false);
+  // Finished and forgotten chats leave Bean's bubble on their own.
+  const [clock, setClock] = useState(() => Date.now());
   const connectionRequested = useRef(false);
 
   useEffect(() => {
@@ -99,9 +89,11 @@ export default function App() {
   }, [state]);
 
   useEffect(() => {
-    void loadManifest().then((nextManifest) =>
-      setManifest(nextManifest ?? DEFAULT_ASSET_PACK),
-    );
+    void loadManifest().then((nextManifest) => {
+      const loaded = nextManifest ?? DEFAULT_ASSET_PACK;
+      setManifest(loaded);
+      preloadAssets(loaded);
+    });
     if (isBeanDesktop()) {
       void invoke<string | null>("get_asset_pack_path", {})
         .then((saved) => {
@@ -112,12 +104,86 @@ export default function App() {
     }
   }, []);
 
+  const beanScale = BEAN_SCALE[state.preferences.beanSize] ?? 1;
+  const bubbleScale = BUBBLE_SCALE[state.preferences.bubbleSize] ?? 1;
   useEffect(() => {
     if (!isBeanDesktop()) return;
     void invoke("set_window_mode", {
       compact: state.preferences.welcomeShown,
+      scale: beanScale,
     }).catch((error) => setAccessMessage(String(error)));
-  }, [state.preferences.welcomeShown]);
+  }, [state.preferences.welcomeShown, beanScale]);
+
+  useEffect(() => {
+    if (!isBeanDesktop()) return;
+    void invoke("set_always_on_top", {
+      onTop: state.preferences.alwaysOnTop,
+    }).catch((error) => setAccessMessage(String(error)));
+  }, [state.preferences.alwaysOnTop]);
+
+  const shownChats = visibleChats(state.chats, clock, chatKey(state));
+  const followingChats = shownChats.length > 0;
+  useEffect(() => {
+    setClock(Date.now());
+    if (!followingChats) return;
+    const intervalId = window.setInterval(() => setClock(Date.now()), 1_000);
+    return () => window.clearInterval(intervalId);
+  }, [followingChats, state.chats]);
+
+  // Keep the menu bar's Pause/Resume item in step with Bean.
+  useEffect(() => {
+    if (!isBeanDesktop()) return;
+    void invoke("set_tray_state", { paused: state.paused }).catch(
+      () => undefined,
+    );
+  }, [state.paused]);
+
+  // Settings lives in its own window (opened from the menu bar). Bean's
+  // window owns the preferences: it applies what Settings asks for, runs
+  // connection checks, and reports its state back after every change.
+  const permissionDenied =
+    state.unavailableReason === "permission_denied" || permissionBlocked;
+  const status: BeanStatus = {
+    paused: state.paused,
+    unavailable: state.unavailable,
+    statusText: state.statusText,
+    notice: accessMessage,
+    permissionDenied,
+    checkingAccess,
+  };
+  const reportRef = useRef({ prefs: state.preferences, status });
+  const actionsRef = useRef({
+    checkAccess: () => undefined as unknown,
+    resetPermission: () => undefined as unknown,
+  });
+  useEffect(() => {
+    reportRef.current = { prefs: state.preferences, status };
+    sendFromBean({ type: "prefs", prefs: state.preferences, status });
+    // Report only when something Settings shows has changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    state.preferences,
+    state.paused,
+    state.unavailable,
+    state.statusText,
+    accessMessage,
+    permissionDenied,
+    checkingAccess,
+  ]);
+  useEffect(
+    () =>
+      onMessageToBean((message) => {
+        if (message.type === "patch")
+          dispatch({ type: "patchPrefs", patch: message.patch });
+        else if (message.type === "reset") dispatch({ type: "resetSettings" });
+        else if (message.type === "checkAccess")
+          actionsRef.current.checkAccess();
+        else if (message.type === "resetPermission")
+          actionsRef.current.resetPermission();
+        else sendFromBean({ type: "prefs", ...reportRef.current });
+      }),
+    [],
+  );
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -156,9 +222,24 @@ export default function App() {
       payload.status === "completed" &&
       next.preferences.lastEventKey !== current.preferences.lastEventKey
     ) {
-      if (next.preferences.soundEnabled && !next.muted) playTone();
+      if (next.preferences.soundEnabled && !next.muted)
+        playTone(next.preferences.soundVolume);
     }
   }, []);
+
+  // Apply the update that arrived during a celebration as soon as it ends.
+  useEffect(() => {
+    if (state.beanState !== "happy" || !state.heldEvent) return;
+    const remaining =
+      Date.parse(state.preferences.lastCompletedAt) +
+      CELEBRATION_HOLD_MS -
+      Date.now();
+    const timeoutId = window.setTimeout(
+      () => dispatch({ type: "releaseHeld" }),
+      Number.isFinite(remaining) ? Math.max(0, remaining) : 0,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [state.beanState, state.heldEvent, state.preferences.lastCompletedAt]);
 
   useEffect(() => {
     if (!isBeanDesktop()) return;
@@ -179,6 +260,26 @@ export default function App() {
       unlisten?.();
     };
   }, [applyObserverEvent]);
+
+  // "Pause Monitoring" in the menu bar.
+  useEffect(() => {
+    if (!isBeanDesktop()) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen<string>("bean-tray-action", (event) => {
+      if (active && event.payload === "toggle-pause")
+        dispatch({ type: "setPaused", paused: !stateRef.current.paused });
+    })
+      .then((remove) => {
+        if (active) unlisten = remove;
+        else remove();
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     const receiveNativeStatus = (event: Event) => {
@@ -232,27 +333,20 @@ export default function App() {
     );
   }, [state.preferences.welcomeShown, showContent]);
 
-  const mappedAsset = useMemo(() => {
-    const source = { ...manifest.states } as BeanAssetState;
+  const mappedAsset = useMemo<BeanAssetState>(() => {
+    if (!assetPackPath) return manifest.states;
+    // Convert each full file path; appending to an already converted folder
+    // URL mixes encoded and unencoded separators.
+    const folder = assetPackPath.replace(/\/+$/, "");
+    const file = (name: string) => convertFileSrc(`${folder}/${name}`);
     return {
-      idle: source.idle,
-      noticed: source.noticed,
-      thinking: source.thinking,
-      message: source.message,
-      happy: source.happy,
-      sleepy: source.sleepy,
-      soundOff: source.soundOff,
-      ...(assetPackPath
-        ? {
-            idle: `${convertFileSrc(assetPackPath)}/idle.svg`,
-            noticed: `${convertFileSrc(assetPackPath)}/noticed.svg`,
-            thinking: `${convertFileSrc(assetPackPath)}/thinking.svg`,
-            message: `${convertFileSrc(assetPackPath)}/message.svg`,
-            happy: `${convertFileSrc(assetPackPath)}/happy.svg`,
-            sleepy: `${convertFileSrc(assetPackPath)}/sleepy.svg`,
-            soundOff: `${convertFileSrc(assetPackPath)}/sound-off.svg`,
-          }
-        : null),
+      idle: file("idle.svg"),
+      noticed: file("noticed.svg"),
+      thinking: file("thinking.svg"),
+      message: file("message.svg"),
+      happy: file("happy.svg"),
+      sleepy: file("sleepy.svg"),
+      soundOff: file("sound-off.svg"),
     };
   }, [manifest, assetPackPath]);
 
@@ -285,6 +379,7 @@ export default function App() {
       const accessibilityGranted = await invoke<boolean>(
         "request_accessibility_permission",
       );
+      setPermissionBlocked(!accessibilityGranted);
       if (!accessibilityGranted) {
         throw new Error(
           "Allow Bean in System Settings → Privacy & Security → Accessibility, then choose Connect again.",
@@ -306,16 +401,6 @@ export default function App() {
     }
   };
 
-  const toggleMonitoring = () => {
-    const nextPaused = !state.paused;
-    dispatch({ type: "setPaused", paused: nextPaused });
-    setAccessMessage(
-      nextPaused
-        ? "Monitoring paused until you resume it."
-        : "Bean is watching Claude again.",
-    );
-  };
-
   const checkAccessibility = async () => {
     if (!isBeanDesktop()) {
       setAccessMessage(
@@ -329,7 +414,11 @@ export default function App() {
     try {
       const granted = await invoke<boolean>("request_accessibility_permission");
       if (!granted) {
-        dispatch({ type: "setUnavailable", unavailable: true });
+        dispatch({
+          type: "setUnavailable",
+          unavailable: true,
+          reason: "permission_denied",
+        });
         setAccessMessage(
           "Turn on Bean in System Settings → Accessibility, then check again.",
         );
@@ -354,11 +443,46 @@ export default function App() {
     }
   };
 
+  const resetAccessibility = async (report: (message: string) => void) => {
+    if (!isBeanDesktop()) return;
+    setCheckingAccess(true);
+    report("");
+    try {
+      const granted = await invoke<boolean>("reset_accessibility_permission");
+      setPermissionBlocked(!granted);
+      if (granted && state.preferences.welcomeShown && !state.paused) {
+        await invoke("start_observer");
+      }
+      report(
+        granted
+          ? "Accessibility is working again. Bean is reconnecting to Claude."
+          : "Bean's old permission was cleared. Turn Bean on in System Settings → Privacy & Security → Accessibility, then connect again.",
+      );
+    } catch (error) {
+      report(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCheckingAccess(false);
+    }
+  };
+
+  useEffect(() => {
+    actionsRef.current = {
+      checkAccess: () => void checkAccessibility(),
+      resetPermission: () => void resetAccessibility(setAccessMessage),
+    };
+  });
+
   const currentAsset = mappedAsset[normalizeStatusForAsset(state.beanState)];
 
   return (
     <div
       className={`app-shell${state.preferences.welcomeShown ? "" : " app-welcome"}`}
+      style={
+        {
+          "--bean-scale": beanScale,
+          "--bubble-scale": bubbleScale,
+        } as CSSProperties
+      }
     >
       {state.preferences.welcomeShown ? (
         <main className="shell-content">
@@ -376,32 +500,6 @@ export default function App() {
                   ? "Paused"
                   : "Watching"}
             </span>
-            <button
-              className={`settings-trigger${settingsOpen ? " is-open" : ""}`}
-              type="button"
-              onClick={() => setSettingsOpen((open) => !open)}
-              aria-label={
-                settingsOpen ? "Close Bean settings" : "Open Bean settings"
-              }
-              aria-expanded={settingsOpen}
-            >
-              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M9.7 3.3L10.3 2H13.7L14.3 3.3L16 4L17.4 3.5L19.8 5.9L19.2 7.4L20 9.1L21.4 9.7V13.1L20 13.7L19.2 15.4L19.8 16.9L17.4 19.3L16 18.8L14.3 19.5L13.7 20.8H10.3L9.7 19.5L8 18.8L6.6 19.3L4.2 16.9L4.8 15.4L4 13.7L2.6 13.1V9.7L4 9.1L4.8 7.4L4.2 5.9L6.6 3.5L8 4L9.7 3.3Z"
-                  stroke="currentColor"
-                  strokeWidth="1.65"
-                  strokeLinejoin="round"
-                />
-                <circle
-                  cx="12"
-                  cy="11.4"
-                  r="3.1"
-                  stroke="currentColor"
-                  strokeWidth="1.65"
-                />
-              </svg>
-              <span>Settings</span>
-            </button>
           </header>
           <BeanCompanion
             state={state.beanState}
@@ -409,28 +507,15 @@ export default function App() {
             source={state.source}
             session={state.session}
             preview={showContent ? state.preview : null}
+            chats={shownChats}
             asset={currentAsset}
+            restAsset={mappedAsset.idle}
+            motions={assetPackPath ? {} : manifest.motions}
+            activities={assetPackPath ? {} : manifest.activities}
+            disabledActivities={state.preferences.disabledActivities}
+            activityFrequency={state.preferences.activityFrequency}
+            showBubble={state.preferences.showBubble}
             onDragStart={handleDrag}
-          />
-          <ControlPanel
-            open={settingsOpen}
-            unavailable={state.unavailable}
-            paused={state.paused}
-            soundEnabled={state.preferences.soundEnabled}
-            showContent={showContent}
-            checkingAccess={checkingAccess}
-            accessMessage={accessMessage}
-            statusText={state.statusText}
-            onClose={() => setSettingsOpen(false)}
-            onPauseToggle={() => void toggleMonitoring()}
-            onSoundToggle={() =>
-              dispatch({
-                type: "setSound",
-                soundEnabled: !state.preferences.soundEnabled,
-              })
-            }
-            onShowContentChange={setShowContent}
-            onCheckAccess={() => void checkAccessibility()}
           />
         </main>
       ) : (
@@ -438,6 +523,7 @@ export default function App() {
           showContent={showContent}
           connecting={connecting}
           connectionError={connectionError}
+          permissionBlocked={permissionBlocked}
           onShowContentChange={setShowContent}
           onConnect={() => void connectClaude()}
           onOpenClaude={() =>
@@ -449,6 +535,9 @@ export default function App() {
             void invoke("open_accessibility_settings").catch((error) =>
               setConnectionError(String(error)),
             )
+          }
+          onResetAccessibility={() =>
+            void resetAccessibility(setConnectionError)
           }
         />
       )}

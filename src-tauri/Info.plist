@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Bean lives in the menu bar. A menu-bar app can follow you onto every
+       Space, including full-screen apps; a Dock app cannot. -->
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>

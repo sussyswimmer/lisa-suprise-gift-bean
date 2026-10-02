@@ -23,6 +23,42 @@ describe("external data validation", () => {
     );
     expect(await loadManifest()).toEqual(DEFAULT_ASSET_PACK);
   });
+  it("accepts animated sprite sheets and running art", async () => {
+    const pack = {
+      ...DEFAULT_ASSET_PACK,
+      states: {
+        ...DEFAULT_ASSET_PACK.states,
+        happy: {
+          src: "/bean/sprites/jump.png",
+          frames: 12,
+          fps: 14,
+          scale: 1.4,
+        },
+      },
+      motions: {
+        run: { src: "/bean/sprites/run.png", frames: 8, fps: 12, columns: 4 },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => pack }),
+    );
+    expect(await loadManifest()).toEqual(pack);
+  });
+  it("falls back when a sprite sheet is malformed", async () => {
+    const pack = {
+      ...DEFAULT_ASSET_PACK,
+      states: {
+        ...DEFAULT_ASSET_PACK.states,
+        happy: { src: "/bean/sprites/jump.png", frames: 0, fps: 14 },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => pack }),
+    );
+    expect(await loadManifest()).toBe(DEFAULT_ASSET_PACK);
+  });
   it("rejects malformed native events before rendering", () => {
     const event = {
       source: "chat",
@@ -40,5 +76,21 @@ describe("external data validation", () => {
     expect(
       claudeEventSchema.safeParse({ ...event, status: "unknown" }).success,
     ).toBe(false);
+  });
+  it("keeps activity sheets and ignores activities it does not know", async () => {
+    const boba = { src: "/bean/sprites/boba.png", frames: 24, fps: 10 };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          ...DEFAULT_ASSET_PACK,
+          activities: { boba, skateboard: boba },
+        }),
+      }),
+    );
+    const manifest = await loadManifest();
+    expect(manifest.states).toEqual(DEFAULT_ASSET_PACK.states);
+    expect(manifest.activities).toEqual({ boba });
   });
 });

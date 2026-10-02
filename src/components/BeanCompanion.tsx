@@ -1,19 +1,59 @@
-import { useEffect, useState, type MouseEvent } from "react";
-import { BeanState } from "../types";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { ActivityArt, BeanAsset, BeanMotion, BeanState } from "../types";
+import {
+  ACTIVITY_LABELS,
+  ActivityFrequency,
+  activitiesFor,
+  activityDurationMs,
+  availableActivities,
+  IdleActivity,
+  isWaitingState,
+  motionFor,
+  nextActivity,
+  restDelayMs,
+} from "../activity";
+import BeanSprite from "./BeanSprite";
+import { ChatActivity, chatName } from "../chats";
 
 interface BeanCompanionProps {
   state: BeanState;
-  asset: string;
+  asset: BeanAsset;
+  /** Bean without props, used while she runs somewhere without a run sheet. */
+  restAsset?: BeanAsset;
+  motions?: Partial<Record<BeanMotion, BeanAsset>>;
+  /** Sprite sheets for idle activities, such as sipping boba. */
+  activities?: ActivityArt;
+  /** Activities switched off in Settings. */
+  disabledActivities?: string[];
+  activityFrequency?: ActivityFrequency;
+  showBubble?: boolean;
   statusText: string;
   source: string;
   session: string | null;
   preview: string | null;
+  /** Chats Claude is working on, newest first; each gets a line of its own. */
+  chats?: ChatActivity[];
   onDragStart: () => void;
 }
 
-type IdleActivity = "breathe" | "peek" | "hop" | "boba";
+// Rows the bubble fits above Bean before it summarises the rest.
+const MAX_CHAT_ROWS = 3;
+const CHAT_STATUS_LABELS = {
+  working: "working",
+  attention: "needs you",
+  done: "done",
+} as const;
 
-const IDLE_ACTIVITIES: IdleActivity[] = ["breathe", "peek", "hop", "boba"];
+function chatBubbleFor(chat: ChatActivity, snippet: string | undefined) {
+  const detail =
+    chat.status === "attention"
+      ? "Claude needs you"
+      : chat.status === "done"
+        ? snippet || "Reply is ready!"
+        : snippet ||
+          `${chat.source === "claude_code" ? "Claude Code" : "Claude"} is working…`;
+  return { title: chatName(chat), detail };
+}
 
 function bubbleFor(
   state: BeanState,
@@ -26,7 +66,7 @@ function bubbleFor(
   if (statusText === "Bean is paused")
     return {
       title: "Bean is paused",
-      detail: "Resume monitoring in Settings.",
+      detail: "Resume from the paw icon in the menu bar.",
     };
   if (state === "thinking")
     return {
@@ -61,13 +101,23 @@ function bubbleFor(
 export default function BeanCompanion({
   state,
   asset,
+  restAsset = asset,
+  motions = {},
+  activities = {},
+  disabledActivities = [],
+  activityFrequency = "normal",
+  showBubble = true,
   statusText,
   source,
   session,
   preview,
+  chats = [],
   onDragStart,
 }: BeanCompanionProps) {
   const [idleActivity, setIdleActivity] = useState<IdleActivity>("breathe");
+  const [previousState, setPreviousState] = useState(state);
+  const [arrival, setArrival] = useState(0);
+  const [settledArrival, setSettledArrival] = useState(0);
   const animationLabel: Record<BeanState, string> = {
     idle: "gentle idle breathing and tail wag",
     thinking: "typing on a tiny computer",
@@ -77,9 +127,56 @@ export default function BeanCompanion({
     sleepy: "sleeping breathing",
     soundOff: "quiet idle",
   };
-  const bubble = bubbleFor(state, source, statusText, session, preview);
-  const isWaiting =
-    state === "idle" || state === "sleepy" || state === "soundOff";
+  // Chat names replace the generic status while Claude works; Bean's own
+  // states (paused, waiting for permission, asleep) still speak for her.
+  const followChats =
+    chats.length > 0 && state !== "sleepy" && statusText !== "Bean is paused";
+  const snippet = preview?.replace(/\s+/g, " ").trim().slice(0, 96);
+  const bubble =
+    followChats && chats.length === 1
+      ? chatBubbleFor(chats[0], snippet)
+      : bubbleFor(state, source, statusText, session, preview);
+  const chatRows =
+    followChats && chats.length > 1
+      ? chats.slice(
+          0,
+          chats.length > MAX_CHAT_ROWS ? MAX_CHAT_ROWS - 1 : MAX_CHAT_ROWS,
+        )
+      : null;
+  const isWaiting = isWaitingState(state);
+
+  // Bean runs over to her laptop whenever Claude starts a new piece of work.
+  if (state !== previousState) {
+    setPreviousState(state);
+    if (state === "thinking") setArrival((count) => count + 1);
+  }
+  const isArriving = state === "thinking" && arrival !== settledArrival;
+
+  useEffect(() => {
+    if (arrival === 0) return;
+    const timeoutId = window.setTimeout(
+      () => setSettledArrival(arrival),
+      1_100,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [arrival]);
+
+  // Read the latest state inside the timer without restarting it: Claude can
+  // flicker between idle and unavailable every second, which kept resetting
+  // the countdown so an activity never ended.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+  // Settings are read the same way so changing them never resets the timer.
+  const activityOptions = {
+    available: availableActivities(activities),
+    disabled: disabledActivities,
+  };
+  const optionsRef = useRef({ activityOptions, activities, activityFrequency });
+  useEffect(() => {
+    optionsRef.current = { activityOptions, activities, activityFrequency };
+  });
 
   useEffect(() => {
     if (!isWaiting) {
@@ -87,18 +184,50 @@ export default function BeanCompanion({
       return;
     }
 
-    const chooseNextActivity = () => {
-      const choices = IDLE_ACTIVITIES.filter(
-        (activity) => activity !== idleActivity,
-      );
-      setIdleActivity(choices[Math.floor(Math.random() * choices.length)]);
-    };
+    // Alternate calm breathing with one short activity at a time.
+    const resting = idleActivity === "breathe";
+    const options = optionsRef.current;
     const timeoutId = window.setTimeout(
-      chooseNextActivity,
-      6_500 + Math.floor(Math.random() * 4_500),
+      () =>
+        setIdleActivity(
+          resting
+            ? nextActivity(
+                stateRef.current,
+                "breathe",
+                Math.random,
+                optionsRef.current.activityOptions,
+              )
+            : "breathe",
+        ),
+      resting
+        ? restDelayMs(options.activityFrequency)
+        : activityDurationMs(idleActivity, options.activities[idleActivity]),
     );
     return () => window.clearTimeout(timeoutId);
   }, [isWaiting, idleActivity]);
+
+  // A drowsy Bean drops zoomies at once instead of finishing them.
+  const activity: IdleActivity | "arrive" = isArriving
+    ? "arrive"
+    : isWaiting && activitiesFor(state, activityOptions).includes(idleActivity)
+      ? idleActivity
+      : "breathe";
+  const motion = motionFor(activity);
+  const activitySheet =
+    activity !== "arrive" && activity !== "breathe" && !motion
+      ? activities[activity]
+      : undefined;
+  const art =
+    (motion && motions[motion]) ||
+    activitySheet ||
+    (activity === "arrive" ? restAsset : asset);
+  const facesRight = typeof art !== "string" && art.facing === "right";
+  const activityLabel =
+    activity === "arrive"
+      ? "running to the laptop"
+      : activity === "breathe"
+        ? animationLabel[state]
+        : ACTIVITY_LABELS[activity];
 
   const startNativeDrag = (event: MouseEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;
@@ -108,14 +237,37 @@ export default function BeanCompanion({
 
   return (
     <section className="companion-area">
-      <div className={`activity-bubble activity-${state}`} aria-live="polite">
-        <strong>{bubble.title}</strong>
-        <span>{bubble.detail}</span>
-      </div>
+      {showBubble &&
+        (chatRows ? (
+          <div
+            className={`activity-bubble activity-${state} is-list`}
+            aria-live="polite"
+          >
+            {chatRows.map((chat) => (
+              <div key={chat.key} className={`chat-row chat-${chat.status}`}>
+                <strong>{chatName(chat)}</strong>
+                <em>{CHAT_STATUS_LABELS[chat.status]}</em>
+              </div>
+            ))}
+            {chats.length > chatRows.length && (
+              <span className="chat-more">
+                +{chats.length - chatRows.length} more
+              </span>
+            )}
+          </div>
+        ) : (
+          <div
+            className={`activity-bubble activity-${state}`}
+            aria-live="polite"
+          >
+            <strong>{bubble.title}</strong>
+            <span>{bubble.detail}</span>
+          </div>
+        ))}
       <button
         type="button"
         data-tauri-drag-region
-        className={`bean-shell bean-${state}`}
+        className={`bean-shell bean-${state}${typeof art === "string" ? "" : " has-sprite"}`}
         onMouseDown={startNativeDrag}
         onPointerDown={(event) => {
           if (event.pointerType === "touch") void onDragStart();
@@ -123,14 +275,24 @@ export default function BeanCompanion({
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") void onDragStart();
         }}
-        aria-label={`Drag Bean — ${animationLabel[state]}`}
+        aria-label={`Drag Bean — ${activityLabel}`}
       >
         <div
-          className={`bean-stage idle-activity-${isWaiting ? idleActivity : "breathe"}`}
+          className={`bean-stage idle-activity-${activitySheet ? "sheet" : activity}${motion ? " is-moving" : ""}`}
+          data-activity={activity}
           aria-hidden="true"
         >
-          <img className="bean-image" src={asset} alt="" draggable={false} />
-          {isWaiting && idleActivity === "boba" && (
+          <div className={`bean-facing${facesRight ? " faces-right" : ""}`}>
+            <BeanSprite asset={art} />
+            {motion && (
+              <span className="dust-pixels">
+                <i />
+                <i />
+                <i />
+              </span>
+            )}
+          </div>
+          {activity === "boba" && !activitySheet && (
             <span className="boba-cup">
               <i />
               <b />
@@ -139,7 +301,10 @@ export default function BeanCompanion({
               <em />
             </span>
           )}
-          {state === "thinking" && (
+          {activity === "chase" && !activitySheet && (
+            <span className="chase-swirl" />
+          )}
+          {state === "thinking" && !isArriving && (
             <span className="typing-pixels">
               <i />
               <i />
@@ -148,6 +313,8 @@ export default function BeanCompanion({
           )}
           {state === "happy" && (
             <span className="celebration-pixels">
+              <i />
+              <i />
               <i />
               <i />
               <i />

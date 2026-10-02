@@ -10,4 +10,5 @@ src-tauri/target
 
 src-tauri/gen/
 src-tauri/helpers/bean-claude-observer-*-apple-darwin
+src-tauri/helpers/bean-claude-observer-*-linux-gnu
 src-tauri/helpers/bean-claude-observer/.build/

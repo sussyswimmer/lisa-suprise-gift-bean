@@ -1,14 +1,23 @@
+#[cfg(target_os = "macos")]
+mod macos_spaces;
+
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size, State};
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{
+    AppHandle, Emitter, LogicalSize, Manager, Size, State, WebviewUrl, WebviewWindowBuilder, Wry,
+};
 
 #[derive(Serialize, Deserialize, Clone)]
 struct ClaudeEvent {
@@ -18,13 +27,24 @@ struct ClaudeEvent {
     timestamp: String,
     preview: Option<String>,
     reason: Option<String>,
+    /// The chat's name, when the helper can read one.
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Default)]
 struct ObserverState {
     child: Mutex<Option<Child>>,
     generation: AtomicU64,
+    // Generation of the running supervisor, or 0 when Bean is not observing.
+    active_generation: AtomicU64,
     last_event: Mutex<Option<ClaudeEvent>>,
+}
+
+/// Menu bar items whose text follows Bean's state.
+struct TrayItems {
+    pause: MenuItem<Wry>,
+    visibility: MenuItem<Wry>,
 }
 
 #[derive(Default)]
@@ -57,59 +77,150 @@ fn publish_observer_event(app: &AppHandle, event: &ClaudeEvent) {
 
 #[tauri::command]
 fn start_observer(state: State<'_, BeanState>, app: AppHandle) -> Result<String, String> {
-    let mut running = state
-        .observer
-        .child
-        .lock()
-        .map_err(|e| format!("observer lock failed: {e}"))?;
-    if let Some(child) = running.as_mut() {
-        if child
-            .try_wait()
-            .map_err(|e| format!("could not check observer: {e}"))?
-            .is_none()
-        {
-            return Ok("already_running".into());
-        }
-        *running = None;
-    }
+    let helper = resolve_sidecar_path(&app)?;
+    start_supervised_observer(&state.observer, helper, move |event| {
+        publish_observer_event(&app, &event)
+    })
+}
 
-    let sidecar = resolve_sidecar_path(&app)?;
-    let mut child = Command::new(&sidecar)
+fn spawn_observer_helper(helper: &Path) -> Result<(Child, ChildStdout), String> {
+    let mut child = Command::new(helper)
         .arg("--mode")
         .arg("observe")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("failed to launch observer helper at {sidecar:?}: {e}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "observer helper did not provide stdout".to_string())?;
+        .map_err(|e| format!("failed to launch observer helper at {helper:?}: {e}"))?;
+    match child.stdout.take() {
+        Some(stdout) => Ok((child, stdout)),
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err("observer helper did not provide stdout".into())
+        }
+    }
+}
 
-    let generation = state.observer.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    if let Ok(mut cached) = state.observer.last_event.lock() {
+fn start_supervised_observer<F>(
+    observer: &Arc<ObserverState>,
+    helper: PathBuf,
+    publish: F,
+) -> Result<String, String>
+where
+    F: Fn(ClaudeEvent) + Send + 'static,
+{
+    let mut running = observer
+        .child
+        .lock()
+        .map_err(|e| format!("observer lock failed: {e}"))?;
+    if observer.active_generation.load(Ordering::SeqCst) != 0 {
+        return Ok("already_running".into());
+    }
+
+    // Launch the first helper here so a missing or broken helper is reported
+    // to the caller instead of only being retried in the background.
+    let (child, stdout) = spawn_observer_helper(&helper)?;
+    let generation = observer.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    observer
+        .active_generation
+        .store(generation, Ordering::SeqCst);
+    if let Ok(mut cached) = observer.last_event.lock() {
         *cached = None;
     }
-    let emit_target = app.clone();
-    let observer = state.observer.clone();
+    *running = Some(child);
+
+    let supervised = observer.clone();
     thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if !line.trim().is_empty() {
-                if let Ok(event) = serde_json::from_str::<ClaudeEvent>(&line) {
-                    if let Ok(mut last_event) = observer.last_event.lock() {
-                        if observer.generation.load(Ordering::SeqCst) != generation {
-                            break;
-                        }
-                        *last_event = Some(event.clone());
-                    }
-                    publish_observer_event(&emit_target, &event);
+        supervise_observer(&supervised, &helper, generation, stdout, publish);
+        let _ = supervised.active_generation.compare_exchange(
+            generation,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    });
+    Ok("started".into())
+}
+
+// Keep the helper alive for as long as Bean is observing. Without this, one
+// helper crash or exit silently stopped every Claude update until Bean was
+// restarted or the connection was refreshed by hand.
+fn supervise_observer<F>(
+    observer: &ObserverState,
+    helper: &Path,
+    generation: u64,
+    stdout: ChildStdout,
+    publish: F,
+) where
+    F: Fn(ClaudeEvent),
+{
+    let is_current = || observer.generation.load(Ordering::SeqCst) == generation;
+    let mut stdout = Some(stdout);
+    let mut failures: u32 = 0;
+    loop {
+        if let Some(output) = stdout.take() {
+            let started = Instant::now();
+            for line in BufReader::new(output).lines().map_while(Result::ok) {
+                let Ok(event) = serde_json::from_str::<ClaudeEvent>(&line) else {
+                    continue;
+                };
+                if !is_current() {
+                    return;
                 }
+                if let Ok(mut last_event) = observer.last_event.lock() {
+                    *last_event = Some(event.clone());
+                }
+                publish(event);
+            }
+            if started.elapsed() >= Duration::from_secs(30) {
+                failures = 0;
             }
         }
-    });
 
-    *running = Some(child);
-    Ok("started".into())
+        {
+            let Ok(mut running) = observer.child.lock() else {
+                return;
+            };
+            if !is_current() {
+                return;
+            }
+            if let Some(mut child) = running.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+
+        failures = failures.saturating_add(1);
+        thread::sleep(Duration::from_millis(500 * u64::from(failures.min(10))));
+
+        let Ok(mut running) = observer.child.lock() else {
+            return;
+        };
+        if !is_current() {
+            return;
+        }
+        if let Ok((child, output)) = spawn_observer_helper(helper) {
+            stdout = Some(output);
+            *running = Some(child);
+        }
+    }
+}
+
+fn stop_supervised_observer(observer: &ObserverState) -> Result<(), String> {
+    let mut running = observer
+        .child
+        .lock()
+        .map_err(|e| format!("observer lock failed: {e}"))?;
+    observer.generation.fetch_add(1, Ordering::SeqCst);
+    observer.active_generation.store(0, Ordering::SeqCst);
+    if let Some(mut child) = running.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    if let Ok(mut cached) = observer.last_event.lock() {
+        *cached = None;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -124,19 +235,7 @@ fn get_observer_status(state: State<'_, BeanState>) -> Option<ClaudeEvent> {
 
 #[tauri::command]
 fn stop_observer(state: State<'_, BeanState>) -> Result<String, String> {
-    let mut running = state
-        .observer
-        .child
-        .lock()
-        .map_err(|e| format!("observer lock failed: {e}"))?;
-    state.observer.generation.fetch_add(1, Ordering::SeqCst);
-    if let Some(mut child) = running.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    if let Ok(mut cached) = state.observer.last_event.lock() {
-        *cached = None;
-    }
+    stop_supervised_observer(&state.observer)?;
     Ok("stopped".into())
 }
 
@@ -174,6 +273,24 @@ async fn request_accessibility_permission(app: AppHandle) -> Result<bool, String
     let event: ClaudeEvent = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("Accessibility helper returned an invalid response: {e}"))?;
     Ok(event.status != "unavailable")
+}
+
+// Test builds are ad-hoc signed, so every new build has a different signature.
+// macOS keeps showing the old Accessibility switch as on while denying the new
+// build. Clearing Bean's entry lets the next request register this build.
+#[tauri::command]
+async fn reset_accessibility_permission(app: AppHandle) -> Result<bool, String> {
+    let identifier = app.config().identifier.clone();
+    let status = Command::new("/usr/bin/tccutil")
+        .args(["reset", "Accessibility", &identifier])
+        .status()
+        .map_err(|e| format!("could not reset Accessibility permission: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "tccutil could not reset Bean's permission ({status})"
+        ));
+    }
+    request_accessibility_permission(app).await
 }
 
 #[tauri::command]
@@ -226,6 +343,9 @@ fn update_claude_hooks(settings: &mut Value) -> Result<(), String> {
 
     for (event, status) in [
         ("UserPromptSubmit", "working"),
+        // Tool results keep a long turn alive in the helper and end a
+        // permission prompt once it is answered; they are not shown directly.
+        ("PostToolUse", "heartbeat"),
         ("Stop", "completed"),
         ("MessageDisplay", "reply"),
         ("StopFailure", "failed"),
@@ -294,8 +414,10 @@ fn get_asset_pack_path(state: State<'_, BeanState>) -> Option<String> {
     state.asset_pack_path.lock().ok().and_then(|s| s.clone())
 }
 
+// The helper retries while Claude builds its accessibility tree; run it off the
+// main thread so Bean's window stays responsive.
 #[tauri::command]
-fn get_connection_status(app: AppHandle) -> Result<ClaudeEvent, String> {
+async fn get_connection_status(app: AppHandle) -> Result<ClaudeEvent, String> {
     let output = Command::new(resolve_sidecar_path(&app)?)
         .arg("--connection-status")
         .output()
@@ -354,18 +476,209 @@ fn drag_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_window_mode(app: AppHandle, compact: bool) -> Result<(), String> {
+fn set_window_mode(app: AppHandle, compact: bool, scale: Option<f64>) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or("main window is unavailable")?;
+    // Bean's size setting scales her 140 px box from her feet; grow the
+    // window by the same amount so she never overlaps her speech bubble.
+    let scale = scale.unwrap_or(1.0).clamp(0.5, 2.0);
     let (width, height) = if compact {
-        (272.0, 248.0)
+        (272.0, 248.0 + 140.0 * (scale - 1.0))
     } else {
         (360.0, 370.0)
     };
     window
         .set_size(Size::Logical(LogicalSize::new(width, height)))
         .map_err(|e| format!("could not resize Bean: {e}"))
+}
+
+#[tauri::command]
+fn set_always_on_top(app: AppHandle, on_top: bool) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window is unavailable")?;
+    window
+        .set_always_on_top(on_top)
+        .map_err(|e| format!("could not change Bean's window level: {e}"))?;
+    follow_all_spaces(&window, on_top);
+    Ok(())
+}
+
+/// Keeps Bean on every desktop and over full-screen apps, so she follows
+/// you when you swipe between Spaces.
+#[cfg(target_os = "macos")]
+fn follow_all_spaces(window: &tauri::WebviewWindow, on_top: bool) {
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        if let Ok(ns_window) = target.ns_window() {
+            // SAFETY: Tauri hands back Bean's live NSWindow, and this runs on
+            // the main thread as AppKit requires.
+            unsafe { macos_spaces::follow_all_spaces(ns_window, on_top) };
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn follow_all_spaces(_window: &tauri::WebviewWindow, _on_top: bool) {}
+
+#[tauri::command]
+fn reset_window_position(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window is unavailable")?;
+    window
+        .show()
+        .and_then(|_| window.center())
+        .map_err(|e| format!("could not move Bean: {e}"))?;
+    sync_visibility_item(&app);
+    Ok(())
+}
+
+/// Bean's window reports pause changes so the menu bar item reads correctly.
+#[tauri::command]
+fn set_tray_state(app: AppHandle, paused: bool) -> Result<(), String> {
+    let items = app.state::<TrayItems>();
+    items
+        .pause
+        .set_text(if paused {
+            "Resume Monitoring"
+        } else {
+            "Pause Monitoring"
+        })
+        .map_err(|e| format!("could not update the menu bar: {e}"))
+}
+
+fn sync_visibility_item(app: &AppHandle) {
+    let visible = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(true);
+    if let Some(items) = app.try_state::<TrayItems>() {
+        let _ = items
+            .visibility
+            .set_text(if visible { "Hide Bean" } else { "Show Bean" });
+    }
+}
+
+fn open_settings_window(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window.show()?;
+        window.unminimize()?;
+        return window.set_focus();
+    }
+    // The same page as Bean's window; it renders Settings for this label.
+    let window = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+        .title("Bean Settings")
+        .inner_size(720.0, 560.0)
+        .min_inner_size(600.0, 460.0)
+        .center()
+        .focused(true)
+        .build()?;
+    window.set_focus()
+}
+
+fn toggle_bean_visibility(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_visible()? {
+            window.hide()?;
+        } else {
+            window.show()?;
+        }
+    }
+    sync_visibility_item(app);
+    Ok(())
+}
+
+/// Writes what the helper can read from Claude's window (control labels
+/// only, no message text) to the Desktop and opens it, so a person can send
+/// it along when Bean misreads Claude.
+fn save_diagnostics(app: &AppHandle) -> Result<(), String> {
+    let sidecar = resolve_sidecar_path(app)?;
+    let output = Command::new(&sidecar)
+        .arg("--diagnose")
+        .output()
+        .map_err(|e| format!("could not run the Accessibility helper: {e}"))?;
+    let mut report = format!(
+        "Bean {}\nHelper: {}\n\n",
+        app.package_info().version,
+        sidecar.display()
+    );
+    report.push_str(&String::from_utf8_lossy(&output.stdout));
+    if !output.stderr.is_empty() {
+        report.push_str("\nErrors:\n");
+        report.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+    let home = std::env::var_os("HOME").ok_or("home directory is unavailable")?;
+    let path = PathBuf::from(home)
+        .join("Desktop")
+        .join("Bean Diagnostics.txt");
+    fs::write(&path, report).map_err(|e| format!("could not save diagnostics: {e}"))?;
+    Command::new("/usr/bin/open")
+        .arg(&path)
+        .status()
+        .map_err(|e| format!("could not open diagnostics: {e}"))?;
+    Ok(())
+}
+
+/// Bean's icon in the macOS menu bar, with Settings, Pause, Show/Hide and Quit.
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+    let pause = MenuItem::with_id(app, "pause", "Pause Monitoring", true, None::<&str>)?;
+    let visibility = MenuItem::with_id(app, "visibility", "Hide Bean", true, None::<&str>)?;
+    let diagnostics = MenuItem::with_id(
+        app,
+        "diagnostics",
+        "Save Diagnostics to Desktop",
+        true,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Bean", true, Some("CmdOrCtrl+Q"))?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &settings,
+            &PredefinedMenuItem::separator(app)?,
+            &pause,
+            &visibility,
+            &PredefinedMenuItem::separator(app)?,
+            &diagnostics,
+            &quit,
+        ],
+    )?;
+    TrayIconBuilder::with_id("bean")
+        .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
+        // A template image follows the menu bar's light or dark appearance.
+        .icon_as_template(true)
+        .tooltip("Bean")
+        .menu(&menu)
+        .on_menu_event(|app, event| {
+            let result = match event.id.as_ref() {
+                "settings" => open_settings_window(app),
+                "pause" => app.emit_to("main", "bean-tray-action", "toggle-pause"),
+                "visibility" => toggle_bean_visibility(app),
+                "diagnostics" => {
+                    let app = app.clone();
+                    thread::spawn(move || {
+                        if let Err(error) = save_diagnostics(&app) {
+                            eprintln!("Bean diagnostics failed: {error}");
+                        }
+                    });
+                    Ok(())
+                }
+                "quit" => {
+                    app.exit(0);
+                    Ok(())
+                }
+                _ => Ok(()),
+            };
+            if let Err(error) = result {
+                eprintln!("Bean menu bar action failed: {error}");
+            }
+        })
+        .build(app)?;
+    app.manage(TrayItems { pause, visibility });
+    Ok(())
 }
 
 fn resolve_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -399,7 +712,8 @@ fn resolve_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn main() {
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut app = tauri::Builder::default()
         .manage(BeanState::default())
         .invoke_handler(tauri::generate_handler![
             start_observer,
@@ -408,33 +722,38 @@ fn main() {
             set_asset_pack_path,
             get_asset_pack_path,
             request_accessibility_permission,
+            reset_accessibility_permission,
             install_claude_code_hooks,
             get_connection_status,
             open_claude,
             open_accessibility_settings,
             drag_window,
             set_window_mode,
+            set_always_on_top,
+            reset_window_position,
+            set_tray_state,
             quit_app
         ])
         .setup(|app| {
             if let Some(main_window) = app.get_webview_window("main") {
                 let _ = main_window.set_always_on_top(true);
+                follow_all_spaces(&main_window, true);
             }
+            build_tray(app.handle())?;
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                let state = app.state::<BeanState>();
-                if let Ok(mut running) = state.observer.child.lock() {
-                    if let Some(mut child) = running.take() {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                    }
-                };
-            }
-        });
+        .expect("error while building tauri application");
+    // A menu-bar-only app may place its windows over other apps' full-screen
+    // Spaces; a regular Dock app may not. Set it before launch finishes, or
+    // macOS keeps Bean on the Space where she first appeared.
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    app.run(|app, event| {
+        if let tauri::RunEvent::Exit = event {
+            let _ = stop_supervised_observer(&app.state::<BeanState>().observer);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -461,5 +780,53 @@ mod tests {
     fn rejects_malformed_hook_configuration() {
         assert!(update_claude_hooks(&mut json!({"hooks": []})).is_err());
         assert!(update_claude_hooks(&mut json!({"hooks": {"Stop": {}}})).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn observer_restarts_an_exited_helper_until_stopped() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::mpsc;
+
+        let dir = std::env::temp_dir().join(format!("bean-observer-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let helper = dir.join("helper");
+        fs::write(
+            &helper,
+            "#!/bin/sh\necho '{\"source\":\"chat\",\"session\":null,\"status\":\"idle\",\"timestamp\":\"2026-09-30T00:00:00Z\"}'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let observer = Arc::new(ObserverState::default());
+        let (sender, receiver) = mpsc::channel();
+        let started = start_supervised_observer(&observer, helper.clone(), move |event| {
+            let _ = sender.send(event.status);
+        });
+        assert_eq!(started.unwrap(), "started");
+        // The helper exits after one event, so a second event means it was relaunched.
+        for _ in 0..2 {
+            let status = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(status, "idle");
+        }
+        assert_eq!(
+            start_supervised_observer(&observer, helper, |_| {}).unwrap(),
+            "already_running"
+        );
+
+        stop_supervised_observer(&observer).unwrap();
+        while receiver.recv_timeout(Duration::from_millis(1_500)).is_ok() {}
+        assert!(receiver.recv_timeout(Duration::from_secs(2)).is_err());
+        assert_eq!(observer.active_generation.load(Ordering::SeqCst), 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn observer_start_reports_a_missing_helper() {
+        let observer = Arc::new(ObserverState::default());
+        let missing = std::env::temp_dir().join("bean-observer-missing-helper");
+        assert!(start_supervised_observer(&observer, missing, |_| {}).is_err());
+        assert_eq!(observer.active_generation.load(Ordering::SeqCst), 0);
     }
 }

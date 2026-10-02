@@ -1,23 +1,31 @@
 // @vitest-environment jsdom
 import { StrictMode } from "react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import App from "./App";
 import { initialState } from "./state";
 
-const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
+const native = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  listen: vi.fn(),
+  emit: vi.fn(),
+}));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: native.invoke,
   convertFileSrc: (path: string) => path,
 }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: native.listen }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: native.listen,
+  emit: native.emit,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -28,6 +36,7 @@ beforeEach(() => {
   });
   native.invoke.mockResolvedValue(null);
   native.listen.mockResolvedValue(vi.fn());
+  native.emit.mockResolvedValue(undefined);
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
 });
 afterEach(() => {
@@ -80,12 +89,22 @@ describe("native event integration", () => {
   });
   it("updates hook privacy and hides previews when the setting changes", async () => {
     restore({ showContent: true });
+    const toBean = new Map<string, (event: { payload: unknown }) => void>();
+    native.listen.mockImplementation(
+      async (name: string, handler: (event: { payload: unknown }) => void) => {
+        toBean.set(name, handler);
+        return vi.fn();
+      },
+    );
     render(<App />);
     event("working", "private preview");
     expect(screen.getByText("private preview")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Open Bean settings" }));
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Show Claude Code previews" }),
+    await waitFor(() => expect(toBean.has("bean-settings-to-main")).toBe(true));
+    // The Settings window turns previews off.
+    act(() =>
+      toBean.get("bean-settings-to-main")!({
+        payload: { type: "patch", patch: { showContent: false } },
+      }),
     );
     expect(screen.queryByText("private preview")).toBeNull();
     await waitFor(() =>
@@ -141,6 +160,112 @@ describe("native event integration", () => {
     view.unmount();
     expect(removers.every((remove) => remove.mock.calls.length === 1)).toBe(
       true,
+    );
+  });
+});
+
+describe("celebration timing", () => {
+  it("shows work that arrived during a celebration once it ends", async () => {
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+        "Date",
+      ],
+    });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    vi.setSystemTime(new Date("2026-09-22T00:00:00Z"));
+    restore();
+    render(<App />);
+    const send = (status: string, session: string, second: number) =>
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("bean-observer-status", {
+            detail: {
+              source: "claude_code",
+              session,
+              status,
+              timestamp: `2026-09-22T00:00:0${second}Z`,
+            },
+          }),
+        );
+      });
+    send("completed", "s1", 0);
+    send("working", "s2", 2);
+    expect(document.querySelector(".bean-happy")).toBeTruthy();
+    // Both sessions get a line of their own above Bean.
+    expect(screen.getByText("done")).toBeTruthy();
+    expect(screen.getByText("working")).toBeTruthy();
+    act(() => vi.advanceTimersByTime(6_100));
+    expect(document.querySelector(".bean-thinking")).toBeTruthy();
+    // The finished session leaves the list after a few seconds.
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(screen.queryByText("done")).toBeNull();
+    expect(screen.getByText("Claude Code is working…")).toBeTruthy();
+  });
+});
+
+describe("menu bar and Settings window", () => {
+  function handlers() {
+    const byName = new Map<string, (event: { payload: unknown }) => void>();
+    native.listen.mockImplementation(
+      async (name: string, handler: (event: { payload: unknown }) => void) => {
+        byName.set(name, handler);
+        return vi.fn();
+      },
+    );
+    return byName;
+  }
+
+  it("pauses from the menu bar and updates its menu item", async () => {
+    restore();
+    const byName = handlers();
+    render(<App />);
+    await waitFor(() => expect(byName.has("bean-tray-action")).toBe(true));
+    act(() => byName.get("bean-tray-action")!({ payload: "toggle-pause" }));
+    expect(screen.getByText("Paused")).toBeTruthy();
+    await waitFor(() =>
+      expect(native.invoke).toHaveBeenCalledWith("set_tray_state", {
+        paused: true,
+      }),
+    );
+  });
+
+  it("applies and saves changes sent from the Settings window", async () => {
+    restore();
+    const byName = handlers();
+    render(<App />);
+    await waitFor(() => expect(byName.has("bean-settings-to-main")).toBe(true));
+    act(() =>
+      byName.get("bean-settings-to-main")!({
+        payload: {
+          type: "patch",
+          patch: { beanSize: "large", alwaysOnTop: false },
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(native.invoke).toHaveBeenCalledWith("set_window_mode", {
+        compact: true,
+        scale: 1.25,
+      }),
+    );
+    expect(native.invoke).toHaveBeenCalledWith("set_always_on_top", {
+      onTop: false,
+    });
+    const saved = JSON.parse(localStorage.getItem("bean.preferences.v1")!);
+    expect(saved.preferences.beanSize).toBe("large");
+    // Bean reports the new settings back to the Settings window.
+    expect(native.emit).toHaveBeenCalledWith(
+      "bean-settings-from-main",
+      expect.objectContaining({
+        type: "prefs",
+        prefs: expect.objectContaining({ beanSize: "large" }),
+      }),
     );
   });
 });
